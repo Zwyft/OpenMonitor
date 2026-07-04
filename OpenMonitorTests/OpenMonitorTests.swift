@@ -1,36 +1,62 @@
-//
-//  OpenMonitorTests.swift
-//  OpenMonitorTests
-//
-//  Created by Juan Ruiz on 19/10/23.
-//
-
+import Foundation
 import XCTest
 @testable import OpenMonitor
 
 final class OpenMonitorTests: XCTestCase {
+    func testManualRTSPBuildsValidStreamURL() throws {
+        let endpoint = try CameraEndpoint.manualRTSP(
+            host: "192.168.1.20",
+            port: 554,
+            path: "/live"
+        )
 
-    override func setUpWithError() throws {
-        // Put setup code here. This method is called before the invocation of each test method in the class.
+        XCTAssertEqual(endpoint.streamURL.absoluteString, "rtsp://192.168.1.20:554/live")
+        XCTAssertEqual(endpoint.playbackStrategy, .directStream)
+        XCTAssertEqual(endpoint.transport, .rtsp)
     }
 
-    override func tearDownWithError() throws {
-        // Put teardown code here. This method is called after the invocation of each test method in the class.
+    func testManualONVIFBuildsDeviceServiceURL() throws {
+        let endpoint = try CameraEndpoint.manualONVIF(
+            host: "192.168.1.21",
+            port: 80
+        )
+
+        XCTAssertEqual(endpoint.streamURL.absoluteString, "http://192.168.1.21:80/onvif/device_service")
+        XCTAssertEqual(endpoint.playbackStrategy, .onvifDeviceService)
+        XCTAssertEqual(endpoint.transport, .http)
     }
 
-    func testExample() throws {
-        // This is an example of a functional test case.
-        // Use XCTAssert and related functions to verify your tests produce the correct results.
-        // Any test you write for XCTest can be annotated as throws and async.
-        // Mark your test throws to produce an unexpected failure when your test encounters an uncaught error.
-        // Mark your test async to allow awaiting for asynchronous code to complete. Check the results with assertions afterwards.
-    }
+    func testDeduplicationPrefersHigherConfidenceEndpoint() {
+        let lowerConfidence = CameraEndpoint(
+            name: "Camera A",
+            source: .lanProbe,
+            transport: .rtsp,
+            playbackStrategy: .directStream,
+            host: "192.168.1.22",
+            port: 554,
+            path: "/",
+            streamURL: URL(string: "rtsp://192.168.1.22:554/")!,
+            confidence: 0.1,
+            details: "Low confidence"
+        )
 
-    func testPerformanceExample() throws {
-        // This is an example of a performance test case.
-        self.measure {
-            // Put the code you want to measure the time of here.
-        }
-    }
+        let higherConfidence = CameraEndpoint(
+            name: "Camera A",
+            source: .lanProbe,
+            transport: .rtsp,
+            playbackStrategy: .directStream,
+            host: "192.168.1.22",
+            port: 554,
+            path: "/",
+            streamURL: URL(string: "rtsp://192.168.1.22:554/")!,
+            confidence: 0.9,
+            details: "Higher confidence"
+        )
 
+        let deduped = [lowerConfidence, higherConfidence].deduplicatedAndSorted()
+
+        XCTAssertEqual(deduped.count, 1)
+        XCTAssertEqual(deduped.first?.confidence, 0.9)
+        XCTAssertTrue(deduped.first?.details.contains("Higher confidence") == true)
+    }
 }

@@ -1,14 +1,38 @@
-# OpenMonitor IOS
-IOS Open Monitoring App, allows you to make use of your IOS device to monitor other devices or use external cameras, this is an open source project and I'm actively looking for a team to work on this, students feel free
+# OpenMonitor
 
-The current plan and vision is to have this app make your IOS device into a full blown monitor wether you want to use it for games, or (as I intend to) a camera monitor by buying a cheap usb capture card
+OpenMonitor started as a local camera monitor and now includes a network camera viewer path.
 
-It currently works on ipad and im ironing out the interface so I can release a first version, but the plan is to use apple metal to implement asistance features such as focus peaking, false color and zebras,
+## What it does
+- Browses the local Wi‑Fi network for cameras using Bonjour and ONVIF WS-Discovery.
+- Deep-scans the local subnet for RTSP/HTTP camera endpoints and Baseus hub fingerprints.
+- Plays RTSP and ONVIF-derived streams with VLC-backed playback.
+- Keeps the original local camera preview as a separate tab.
 
-This being said,  this is mostly an educational project and will be forever open source,
+## Current constraints
+- Baseus X1 Pro does not advertise RTSP/ONVIF publicly, so the app probes for local endpoints and stream URLs instead of assuming a vendor protocol.
+- If the camera only exposes a cloud/hub-controlled feed, the app will show the discovered hub or web endpoint but may still require a manual stream path.
 
-the released version of the app will be governed in a benevolent dictator kinda fashion,
+## Setup
+- Open `OpenMonitor.xcodeproj` in Xcode.
+- Let Xcode resolve the `VLCKitSPM` Swift package dependency.
+- Run on a physical iPhone or iPad so local network discovery can prompt for permission.
 
-feel free to work, resell, rebrand, or do whatever you want with this code,
+## Build an IPA
+- Use `scripts/build-ipa.sh` on a Mac with Xcode installed.
+- The script archives the `OpenMonitor` scheme and exports a development IPA by default.
+- Override `METHOD=ad-hoc` if you want a distribution IPA for provisioned devices.
+- For manual signing, set `SIGNING_STYLE=manual`, `PROVISIONING_PROFILE_SPECIFIER=<profile name>`, and `CODE_SIGN_IDENTITY=<signing identity>`.
 
-If you want to donate or comission specific features, reach me out!
+## GitHub Actions IPA
+- The repo includes `.github/workflows/build-ipa.yml`, which exports an IPA on push to `main` and on manual dispatch.
+- Configure these repository secrets before relying on the workflow:
+  - `IOS_SIGNING_KEYCHAIN_PASSWORD`
+  - `IOS_SIGNING_CERT_BASE64`
+  - `IOS_SIGNING_CERT_PASSWORD`
+  - `IOS_SIGNING_PROFILE_BASE64`
+- The workflow uploads the result as the `OpenMonitor-ipa` artifact.
+
+## Tips
+- Use **Rescan** for quick Bonjour/ONVIF discovery.
+- Use **Deep Scan** when you want the app to inspect the subnet for hidden RTSP/HTTP endpoints.
+- If a camera is found but does not play immediately, open it manually and adjust the path or credentials.

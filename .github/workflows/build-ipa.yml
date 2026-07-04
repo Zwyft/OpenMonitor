@@ -1,0 +1,116 @@
+name: Build IPA
+
+on:
+  workflow_dispatch:
+    inputs:
+      method:
+        description: Export method
+        required: false
+        default: development
+        type: choice
+        options:
+          - development
+          - ad-hoc
+      signing_style:
+        description: Code signing style
+        required: false
+        default: manual
+        type: choice
+        options:
+          - manual
+          - automatic
+  push:
+    branches:
+      - main
+
+jobs:
+  build-ipa:
+    runs-on: macos-14
+    env:
+      TEAM_ID: 5UT6KY39P9
+      METHOD: ${{ github.event_name == 'workflow_dispatch' && inputs.method || 'development' }}
+      SIGNING_STYLE: ${{ github.event_name == 'workflow_dispatch' && inputs.signing_style || 'manual' }}
+      APP_BUNDLE_IDENTIFIER: com.no3.OpenMonitor
+      KEYCHAIN_PASSWORD: ${{ secrets.IOS_SIGNING_KEYCHAIN_PASSWORD }}
+      IOS_SIGNING_CERT_BASE64: ${{ secrets.IOS_SIGNING_CERT_BASE64 }}
+      IOS_SIGNING_CERT_PASSWORD: ${{ secrets.IOS_SIGNING_CERT_PASSWORD }}
+      IOS_SIGNING_PROFILE_BASE64: ${{ secrets.IOS_SIGNING_PROFILE_BASE64 }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: xcode-select -p
+
+      - name: Resolve package dependencies
+        run: xcodebuild -project OpenMonitor.xcodeproj -scheme OpenMonitor -resolvePackageDependencies
+
+      - name: Import signing assets
+        if: ${{ env.SIGNING_STYLE == 'manual' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          : "${KEYCHAIN_PASSWORD:?Missing IOS_SIGNING_KEYCHAIN_PASSWORD secret}"
+          : "${IOS_SIGNING_CERT_BASE64:?Missing IOS_SIGNING_CERT_BASE64 secret}"
+          : "${IOS_SIGNING_CERT_PASSWORD:?Missing IOS_SIGNING_CERT_PASSWORD secret}"
+          : "${IOS_SIGNING_PROFILE_BASE64:?Missing IOS_SIGNING_PROFILE_BASE64 secret}"
+
+          KEYCHAIN_PATH="$RUNNER_TEMP/openmonitor-signing.keychain-db"
+          CERT_PATH="$RUNNER_TEMP/signing.p12"
+          PROFILE_PATH="$RUNNER_TEMP/signing.mobileprovision"
+          PROFILE_PLIST="$RUNNER_TEMP/profile.plist"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
+
+          printf '%s' "$IOS_SIGNING_CERT_BASE64" | base64 -D > "$CERT_PATH"
+          printf '%s' "$IOS_SIGNING_PROFILE_BASE64" | base64 -D > "$PROFILE_PATH"
+
+          security import "$CERT_PATH" -k "$KEYCHAIN_PATH" -P "$IOS_SIGNING_CERT_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security -T /usr/bin/xcodebuild
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          security cms -D -i "$PROFILE_PATH" > "$PROFILE_PLIST"
+          PROFILE_UUID=$(/usr/libexec/PlistBuddy -c 'Print UUID' "$PROFILE_PLIST")
+          PROFILE_NAME=$(/usr/libexec/PlistBuddy -c 'Print Name' "$PROFILE_PLIST")
+
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          cp "$PROFILE_PATH" "$HOME/Library/MobileDevice/Provisioning Profiles/$PROFILE_UUID.mobileprovision"
+
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+          echo "PROVISIONING_PROFILE_SPECIFIER=$PROFILE_NAME" >> "$GITHUB_ENV"
+
+      - name: Build IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          export METHOD="$METHOD"
+          export SIGNING_STYLE="$SIGNING_STYLE"
+          export APP_BUNDLE_IDENTIFIER="$APP_BUNDLE_IDENTIFIER"
+          export DEVELOPMENT_TEAM="$TEAM_ID"
+          export PROVISIONING_PROFILE_SPECIFIER="${PROVISIONING_PROFILE_SPECIFIER:-}"
+
+          if [[ "$SIGNING_STYLE" == "manual" ]]; then
+            if [[ "$METHOD" == "ad-hoc" ]]; then
+              export CODE_SIGN_IDENTITY="Apple Distribution"
+            else
+              export CODE_SIGN_IDENTITY="Apple Development"
+            fi
+          fi
+
+          if [[ "$SIGNING_STYLE" == "manual" && -z "$PROVISIONING_PROFILE_SPECIFIER" ]]; then
+            echo "PROVISIONING_PROFILE_SPECIFIER is required for manual signing." >&2
+            exit 1
+          fi
+
+          ./scripts/build-ipa.sh
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenMonitor-ipa
+          path: build/ipa/*.ipa
+          if-no-files-found: error
