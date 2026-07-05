@@ -78,8 +78,7 @@ object VicohomeRegionCatalog {
             "https://api-us.vicohome.io",
         ),
         authBaseCandidates = listOf(
-            "https://baseus-us-auth-gw.baseussecurity.com",
-            "https://api-us.vicohome.io",
+            "https://ipc-bu-us-gw.baseussecurity.com",
         ),
         webrtcApiBase = "https://api-us.vicoo.tech",
         webrtcApiBaseCandidates = listOf(
@@ -97,8 +96,7 @@ object VicohomeRegionCatalog {
             "https://api-eu.vicohome.io",
         ),
         authBaseCandidates = listOf(
-            "https://baseus-eu-auth-gw.baseussecurity.com",
-            "https://api-eu.vicohome.io",
+            "https://ipc-bu-eu-gw.baseussecurity.com",
         ),
         webrtcApiBase = "https://api-eu.vicoo.tech",
         webrtcApiBaseCandidates = listOf(
