@@ -25,6 +25,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var scanStatusView: TextView
     private lateinit var baseusTargetsInput: EditText
     private lateinit var proxyStatusView: TextView
+    private lateinit var vpnStatusView: TextView
     private lateinit var vicohomeEmailInput: EditText
     private lateinit var vicohomePasswordInput: EditText
     private lateinit var vicohomeRegionSpinner: Spinner
@@ -39,6 +40,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var captureButton: Button
     private lateinit var proxyStartButton: Button
     private lateinit var proxyStopButton: Button
+    private lateinit var vpnStartButton: Button
+    private lateinit var vpnStopButton: Button
     private lateinit var vicohomeButton: Button
     private lateinit var startButton: Button
     private lateinit var stopButton: Button
@@ -66,6 +69,7 @@ class MainActivity : AppCompatActivity() {
         scanStatusView = findViewById(R.id.scanStatusValue)
         baseusTargetsInput = findViewById(R.id.baseusTargetsInput)
         proxyStatusView = findViewById(R.id.proxyStatusValue)
+        vpnStatusView = findViewById(R.id.vpnStatusValue)
         vicohomeEmailInput = findViewById(R.id.vicohomeEmailInput)
         vicohomePasswordInput = findViewById(R.id.vicohomePasswordInput)
         vicohomeRegionSpinner = findViewById(R.id.vicohomeRegionSpinner)
@@ -81,6 +85,8 @@ class MainActivity : AppCompatActivity() {
         captureButton = findViewById(R.id.captureButton)
         proxyStartButton = findViewById(R.id.proxyStartButton)
         proxyStopButton = findViewById(R.id.proxyStopButton)
+        vpnStartButton = findViewById(R.id.vpnStartButton)
+        vpnStopButton = findViewById(R.id.vpnStopButton)
         vicohomeButton = findViewById(R.id.vicohomeButton)
         startButton = findViewById(R.id.startButton)
         stopButton = findViewById(R.id.stopButton)
@@ -89,6 +95,8 @@ class MainActivity : AppCompatActivity() {
         captureButton.setOnClickListener { captureBaseus() }
         proxyStartButton.setOnClickListener { startProxyCapture() }
         proxyStopButton.setOnClickListener { stopProxyCapture() }
+        vpnStartButton.setOnClickListener { startVpnCapture() }
+        vpnStopButton.setOnClickListener { stopVpnCapture() }
         vicohomeButton.setOnClickListener { syncVicohome() }
         startButton.setOnClickListener { startBridge() }
         stopButton.setOnClickListener { stopBridge() }
@@ -227,6 +235,36 @@ class MainActivity : AppCompatActivity() {
         renderState()
     }
 
+    private val vpnPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) { result ->
+        if (result.resultCode == RESULT_OK) {
+            ContextCompat.startForegroundService(this, BaseusVpnCaptureService.startIntent(this))
+        } else {
+            scanStatusView.text = "VPN permission denied."
+        }
+    }
+
+    private fun startVpnCapture() {
+        scanStatusView.text = "Preparing VPN capture..."
+        BridgeLogStore.info("Baseus VPN capture requested")
+        val intent = android.net.VpnService.prepare(this)
+        if (intent != null) {
+            vpnPermissionLauncher.launch(intent)
+        } else {
+            ContextCompat.startForegroundService(this, BaseusVpnCaptureService.startIntent(this))
+        }
+    }
+
+    private fun stopVpnCapture() {
+        BridgeLogStore.info("Baseus VPN capture stop requested")
+        startService(BaseusVpnCaptureService.stopIntent(this))
+        BaseusVpnCaptureStateStore.update {
+            it.copy(running = false, message = "VPN capture stopped")
+        }
+        renderState()
+    }
+
     private fun syncVicohome() {
         vicohomeButton.isEnabled = false
         val email = vicohomeEmailInput.text?.toString().orEmpty().trim()
@@ -294,6 +332,7 @@ class MainActivity : AppCompatActivity() {
         renderCameraCandidates()
         renderVicohomeEntries()
         renderProxyCapture()
+        renderVpnCapture()
     }
 
     private fun renderCameraCandidates() {
@@ -396,5 +435,18 @@ class MainActivity : AppCompatActivity() {
         }
         proxyStartButton.isEnabled = !state.running
         proxyStopButton.isEnabled = state.running
+    }
+
+    private fun renderVpnCapture() {
+        val state = BaseusVpnCaptureStateStore.snapshot()
+        vpnStatusView.text = buildString {
+            append(if (state.running) "Running" else "Stopped")
+            append(" • ")
+            append(state.message)
+            append("\n")
+            append("Open the Baseus app after starting VPN capture.")
+        }
+        vpnStartButton.isEnabled = !state.running
+        vpnStopButton.isEnabled = state.running
     }
 }

@@ -108,6 +108,43 @@
                 android:text="Stop proxy" />
         </LinearLayout>
 
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="Baseus VPN capture"
+            android:textColor="#CBD5E1"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/vpnStatusValue"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textColor="#E2E8F0"
+            android:textSize="14sp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/vpnStartButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Start VPN capture" />
+
+            <Button
+                android:id="@+id/vpnStopButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="12dp"
+                android:layout_weight="1"
+                android:text="Stop VPN" />
+        </LinearLayout>
+
         <EditText
             android:id="@+id/vicohomeEmailInput"
             android:layout_width="match_parent"

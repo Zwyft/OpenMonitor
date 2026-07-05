@@ -12,6 +12,7 @@ This is a phone-hosted RTSP-to-HLS bridge app.
 - Logs into Vicohome/Baseus cloud accounts and pulls recent device/event clips from the cloud API.
 - Tries Vicohome cloud regions automatically first, then lets you force US or EU if your account is region-bound.
 - Starts a local HTTP proxy on the phone so you can route the Baseus app through it and capture its cloud endpoints.
+- Starts a VPN-based packet capture mode for the Baseus app when proxy capture is ignored.
 
 ## What it does not do yet
 - Full packet-level Wireshark-style sniffing of other apps.
@@ -25,6 +26,7 @@ This is a phone-hosted RTSP-to-HLS bridge app.
 - Capture mode aggressively probes the camera itself for Baseus/VicoHome-style HTTP and RTSP endpoints and logs every candidate it finds.
 - For app traffic capture, start proxy capture, then set the phone's Wi‑Fi proxy to `127.0.0.1:18481` before opening the Baseus app.
 - The proxy logs hostnames and request targets; HTTPS bodies still depend on whether the app honors a local proxy and trusts a user CA.
+- If the app ignores the proxy, start VPN capture instead. It logs DNS and TCP/UDP destinations for the Baseus app package `com.baseus.security.ipc`.
 - If local probing fails, enter your Vicohome account email/password, pick a region, and tap `Vicohome sync` to load cloud devices and recent clips.
 - Leave the region picker on `Auto (US then EU)` if you are not sure which backend your Baseus account uses.
 - Recent clips are HLS URLs from Vicohome’s cloud API; tap one to start playback on the phone or open the URL from the iPad browser.
@@ -45,6 +47,7 @@ This is a phone-hosted RTSP-to-HLS bridge app.
 - If the scanner finds the camera IP but no stream, the camera may use a vendor path outside the current probe list and we can add it next.
 - If Baseus capture mode still finds nothing, the camera may be exposing only a hub/cloud relay path or a vendor-locked stream that needs traffic capture from the phone app itself.
 - If the Baseus app ignores the proxy or pins TLS, we will need a VPN capture path next.
+- If VPN capture shows only local IPs or nothing useful, the app may be using certificate pinning, QUIC, or another backend path that needs deeper inspection.
 - If Vicohome sync fails with `account not registered`, switch the region picker from `Auto` to `US` or `EU` and retry.
 - If Vicohome sync succeeds but clips still fail to play, the cloud URL may be expiring too quickly or the account may require a different region/API host.
 
