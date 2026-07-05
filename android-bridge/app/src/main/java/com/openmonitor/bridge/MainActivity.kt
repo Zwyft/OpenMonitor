@@ -72,9 +72,6 @@ class MainActivity : AppCompatActivity() {
         if (Build.VERSION.SDK_INT >= 33) {
             permissions += Manifest.permission.POST_NOTIFICATIONS
         }
-        if (Build.VERSION.SDK_INT >= 36) {
-            permissions += Manifest.permission.ACCESS_LOCAL_NETWORK
-        }
         val missingPermissions = permissions.filter {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
         }
@@ -84,14 +81,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updatePermissionHint() {
-        val localNetworkGranted = if (Build.VERSION.SDK_INT >= 36) {
-            ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_LOCAL_NETWORK) == PackageManager.PERMISSION_GRANTED
-        } else {
-            true
-        }
-        if (!localNetworkGranted) {
-            statusView.text = "Grant local network permission to let the iPad reach this phone."
-        }
+        statusView.text = "Keep the phone and iPad on the same Wi‑Fi network."
     }
 
     private fun startBridge() {
