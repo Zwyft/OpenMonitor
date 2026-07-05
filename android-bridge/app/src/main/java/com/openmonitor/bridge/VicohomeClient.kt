@@ -238,7 +238,7 @@ class VicohomeClient(
 
                     onProgress("Accepting Baseus login consent card $visitCardId")
                     val commitPayload = JSONObject()
-                        .put("state", VisitStateBean.STATE_COMMITTED)
+                        .put("state", 5)
                         .put("visitCardId", visitCardId)
                     val commitResponse = postJson(
                         baseUrl,
