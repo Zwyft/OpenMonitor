@@ -18,16 +18,16 @@ class VicohomeClient(
         val regions = VicohomeRegionCatalog.choicesFor(regionChoice)
         for ((index, region) in regions.withIndex()) {
             try {
-                onProgress("Logging into Vicohome (${region.label})")
-                val token = login(region)
-                onProgress("Loading Vicohome devices (${region.label})")
-                val devices = listDevices(token, region)
-                onProgress("Loading Vicohome events (${region.label})")
-                val events = listRecentEvents(token, region)
+                onProgress("Logging into Baseus cloud (${region.label})")
+                val token = login(region, onProgress)
+                onProgress("Loading Baseus cloud devices (${region.label})")
+                val devices = listDevices(token, region, onProgress)
+                onProgress("Loading Baseus cloud events (${region.label})")
+                val events = listRecentEvents(token, region, onProgress)
                 return VicohomeSyncResult(
                     devices = devices,
                     events = events,
-                    message = "Loaded ${devices.size} device(s) and ${events.size} event(s) from ${region.label}",
+                    message = "Loaded ${devices.size} device(s) and ${events.size} event(s) from Baseus ${region.label}",
                     session = VicohomeSession(
                         email = email,
                         token = token,
@@ -46,7 +46,11 @@ class VicohomeClient(
         throw lastFailure ?: IllegalStateException("Vicohome sync failed")
     }
 
-    fun fetchLiveTicket(session: VicohomeSession, serialNumber: String): VicohomeLiveTicket {
+    fun fetchLiveTicket(
+        session: VicohomeSession,
+        serialNumber: String,
+        onProgress: (String) -> Unit = {},
+    ): VicohomeLiveTicket {
         val payload = JSONObject()
             .put("serialNumber", serialNumber)
             .put("countryNo", session.region.countryNo)
@@ -70,6 +74,7 @@ class VicohomeClient(
         var lastFailure: Exception? = null
         for (baseUrl in session.region.webrtcApiBaseCandidates) {
             try {
+                onProgress("Trying Baseus live host $baseUrl")
                 val response = postJson(
                     baseUrl,
                     "/device/getWebrtcTicket",
@@ -99,7 +104,7 @@ class VicohomeClient(
         return "uuid:${UUID.randomUUID()}"
     }
 
-    private fun login(region: VicohomeRegion): String {
+    private fun login(region: VicohomeRegion, onProgress: (String) -> Unit = {}): String {
         val payload = JSONObject()
             .put("email", email)
             .put("password", password)
@@ -110,6 +115,7 @@ class VicohomeClient(
         var lastFailure: Exception? = null
         for (baseUrl in region.authBaseCandidates) {
             try {
+                onProgress("Trying Baseus auth host $baseUrl")
                 val response = postJson(baseUrl, "/account/login", payload)
                 val responseObject = JSONObject(response)
                 val resultCode = responseObject.optInt("result", -1)
@@ -133,7 +139,11 @@ class VicohomeClient(
         throw lastFailure ?: IllegalStateException("Login failed (${region.label})")
     }
 
-    private fun listDevices(token: String, region: VicohomeRegion): List<VicohomeDevice> {
+    private fun listDevices(
+        token: String,
+        region: VicohomeRegion,
+        onProgress: (String) -> Unit = {},
+    ): List<VicohomeDevice> {
         val payload = JSONObject()
             .put("language", "en")
             .put("countryNo", region.countryNo)
@@ -141,6 +151,7 @@ class VicohomeClient(
         var lastFailure: Exception? = null
         for (baseUrl in region.apiBaseCandidates) {
             try {
+                onProgress("Trying Baseus device host $baseUrl")
                 val response = postJson(
                     baseUrl,
                     "/device/listuserdevices",
@@ -183,7 +194,11 @@ class VicohomeClient(
         throw lastFailure ?: IllegalStateException("Device list request failed (${region.label})")
     }
 
-    private fun listRecentEvents(token: String, region: VicohomeRegion): List<VicohomeEvent> {
+    private fun listRecentEvents(
+        token: String,
+        region: VicohomeRegion,
+        onProgress: (String) -> Unit = {},
+    ): List<VicohomeEvent> {
         val end = System.currentTimeMillis() / 1000L
         val start = end - 24 * 60 * 60
         val payload = JSONObject()
@@ -195,6 +210,7 @@ class VicohomeClient(
         var lastFailure: Exception? = null
         for (baseUrl in region.apiBaseCandidates) {
             try {
+                onProgress("Trying Baseus event host $baseUrl")
                 val response = postJson(
                     baseUrl,
                     "/library/newselectlibrary",

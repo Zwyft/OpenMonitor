@@ -63,8 +63,9 @@ This is a phone-hosted RTSP-to-HLS bridge app.
 - If the live viewer opens but never shows video, the cloud service may be rejecting browser-only signaling on your account or region and we will need a relay step next.
 
 ## GitHub Actions
-- A workflow at `.github/workflows/build-android-bridge-apk.yml` builds a debug APK and uploads it as an artifact.
+- A workflow at `.github/workflows/build-android-bridge-apk.yml` builds a debug APK and publishes a release asset named `OpenMonitorBridge.apk`.
 - The workflow runs on pushes to `main` and `codex/build-ipa-ci`, and it can also be started manually.
+- The direct download URL is `https://github.com/Zwyft/OpenMonitor/releases/download/android-bridge-latest/OpenMonitorBridge.apk`.
 
 ## Recommended next step
 - If you need Baseus live video, open `http://<phone-ip>:18480/live` after cloud sync and use the browser WebRTC viewer.

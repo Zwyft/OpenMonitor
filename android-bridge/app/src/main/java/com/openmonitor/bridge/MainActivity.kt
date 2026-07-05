@@ -336,7 +336,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         scanStatusView.text = "Syncing Baseus cloud data..."
-        BridgeLogStore.info("Vicohome/Baseus cloud sync requested for $email")
+        BridgeLogStore.info("Baseus cloud sync requested for $email")
         Thread {
             try {
                 val regionChoice = VicohomeRegionChoice.entries[vicohomeRegionSpinner.selectedItemPosition.coerceIn(0, VicohomeRegionChoice.entries.lastIndex)]
@@ -354,7 +354,7 @@ class MainActivity : AppCompatActivity() {
                     renderVicohomeEntries()
                 }
             } catch (exception: Exception) {
-                BridgeLogStore.error("Vicohome/Baseus cloud sync failed: ${exception.stackTraceToString()}")
+                BridgeLogStore.error("Baseus cloud sync failed: ${exception.stackTraceToString()}")
                 runOnUiThread {
                     scanStatusView.text = "Baseus cloud sync failed: ${exception.message ?: "unknown error"}"
                 }

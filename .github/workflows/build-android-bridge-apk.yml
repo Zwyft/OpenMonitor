@@ -10,6 +10,8 @@ on:
 jobs:
   build-apk:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     defaults:
       run:
         working-directory: android-bridge
@@ -37,9 +39,26 @@ jobs:
       - name: Build debug APK
         run: scripts/build-apk.sh
 
-      - name: Upload APK
+      - name: Stage release APK
+        run: cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/OpenMonitorBridge.apk
+
+      - name: Publish APK release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: android-bridge-latest
+          target_commitish: ${{ github.sha }}
+          name: Android Bridge Latest
+          prerelease: true
+          make_latest: true
+          overwrite_files: true
+          body: |
+            Automated Android bridge APK build from ${{ github.sha }}.
+          files: |
+            android-bridge/app/build/outputs/apk/debug/OpenMonitorBridge.apk
+
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: OpenMonitorBridge-apk
+          name: OpenMonitorBridge-apk-zip
           path: android-bridge/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
