@@ -206,7 +206,7 @@ class VicohomeClient(
         region: VicohomeRegion,
         token: String? = null,
     ): String {
-        val requestBody = payload.toString()
+        val requestBody = buildXmFormBody(payload)
         val timestamp = System.currentTimeMillis()
         val connection = (URL(buildRequestUrl(baseUrl, "", emptyMap())).openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
@@ -224,7 +224,7 @@ class VicohomeClient(
                 setRequestProperty("Authorization", token)
             }
             setRequestProperty("Lang", "en")
-            setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            setRequestProperty("Content-Type", "application/x-www-form-urlencoded; charset=utf-8")
             setRequestProperty("Accept", "application/json")
             if (requestBody.isNotBlank()) {
                 setRequestProperty("Content-Length", requestBody.toByteArray(StandardCharsets.UTF_8).size.toString())
@@ -244,6 +244,36 @@ class VicohomeClient(
         } finally {
             connection.disconnect()
         }
+    }
+
+    private fun buildXmFormBody(payload: JSONObject): String {
+        if (payload.length() == 0) {
+            return ""
+        }
+        val builder = StringBuilder()
+        val keys = payload.keys()
+        var first = true
+        while (keys.hasNext()) {
+            val key = keys.next()
+            if (!first) {
+                builder.append('&')
+            }
+            first = false
+            builder.append(java.net.URLEncoder.encode(key, StandardCharsets.UTF_8.name()))
+            builder.append('=')
+            builder.append(
+                java.net.URLEncoder.encode(
+                    when (val value = payload.opt(key)) {
+                        null, JSONObject.NULL -> ""
+                        is JSONObject -> value.toString()
+                        is JSONArray -> value.toString()
+                        else -> value.toString()
+                    },
+                    StandardCharsets.UTF_8.name(),
+                )
+            )
+        }
+        return builder.toString()
     }
 
     private fun updatePrivacyConsent(
