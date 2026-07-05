@@ -27,21 +27,10 @@ class VicohomeClient(
                 val token = login(region, onProgress)
                 onProgress("Loading Baseus cloud devices (${region.label})")
                 val devices = listDevices(token, region, onProgress)
-                val events = try {
-                    onProgress("Loading Baseus cloud events (${region.label})")
-                    listRecentEvents(token, region, onProgress)
-                } catch (exception: Exception) {
-                    onProgress("Baseus event history unavailable (${region.label}): ${exception.message ?: "unknown error"}")
-                    emptyList()
-                }
                 return VicohomeSyncResult(
                     devices = devices,
-                    events = events,
-                    message = if (events.isEmpty()) {
-                        "Loaded ${devices.size} device(s) from Baseus ${region.label}"
-                    } else {
-                        "Loaded ${devices.size} device(s) and ${events.size} event(s) from Baseus ${region.label}"
-                    },
+                    events = emptyList(),
+                    message = "Loaded ${devices.size} device(s) from Baseus ${region.label}",
                     session = VicohomeSession(
                         email = email,
                         token = token,
