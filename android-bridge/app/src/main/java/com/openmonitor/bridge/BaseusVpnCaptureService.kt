@@ -126,10 +126,15 @@ class BaseusVpnCaptureService : VpnService() {
                 val sourcePort = readUnsignedShort(packet, ihl)
                 val destinationPort = readUnsignedShort(packet, ihl + 2)
                 val flags = packet[ihl + 13].toInt() and 0xFF
-                val payloadLength = totalLength - ihl - (((packet[ihl + 12].toInt() ushr 4) and 0x0F) * 4)
+                val tcpHeaderLength = ((packet[ihl + 12].toInt() ushr 4) and 0x0F) * 4
+                val payloadLength = totalLength - ihl - tcpHeaderLength
                 BridgeLogStore.info(
                     "VPN TCP $sourceIp:$sourcePort -> $destinationIp:$destinationPort flags=${tcpFlags(flags)} payload=$payloadLength",
                 )
+                if (payloadLength > 0 && length >= ihl + tcpHeaderLength + payloadLength) {
+                    val payloadOffset = ihl + tcpHeaderLength
+                    parseTcpPayload(packet, payloadOffset, payloadLength, sourceIp, sourcePort, destinationIp, destinationPort)
+                }
                 if (sourceIp == captureTargetIp || destinationIp == captureTargetIp) {
                     BaseusVpnCaptureStateStore.update {
                         it.copy(message = "TCP $sourceIp:$sourcePort -> $destinationIp:$destinationPort", targetIp = captureTargetIp)
@@ -163,10 +168,16 @@ class BaseusVpnCaptureService : VpnService() {
                 if (length < 60) return
                 val sourcePort = readUnsignedShort(packet, 40)
                 val destinationPort = readUnsignedShort(packet, 42)
+                val tcpHeaderLength = ((packet[52].toInt() ushr 4) and 0x0F) * 4
                 val flags = packet[53].toInt() and 0xFF
                 BridgeLogStore.info(
                     "VPN TCP6 $sourceIp:$sourcePort -> $destinationIp:$destinationPort flags=${tcpFlags(flags)}",
                 )
+                val payloadOffset = 40 + tcpHeaderLength
+                val payloadLength = length - payloadOffset
+                if (payloadLength > 0 && length >= payloadOffset + payloadLength) {
+                    parseTcpPayload(packet, payloadOffset, payloadLength, sourceIp, sourcePort, destinationIp, destinationPort)
+                }
                 if (sourceIp == captureTargetIp || destinationIp == captureTargetIp) {
                     BaseusVpnCaptureStateStore.update {
                         it.copy(message = "TCP6 $sourceIp:$sourcePort -> $destinationIp:$destinationPort", targetIp = captureTargetIp)
@@ -187,6 +198,89 @@ class BaseusVpnCaptureService : VpnService() {
                     }
                 }
             }
+        }
+    }
+
+    private fun parseTcpPayload(
+        packet: ByteArray,
+        offset: Int,
+        length: Int,
+        sourceIp: String,
+        sourcePort: Int,
+        destinationIp: String,
+        destinationPort: Int,
+    ) {
+        if (length <= 0) return
+        if (length >= 5 && packet[offset] == 0x16.toByte() && packet[offset + 1] == 0x03.toByte()) {
+            parseTlsClientHello(packet, offset, length, sourceIp, sourcePort, destinationIp, destinationPort)
+            return
+        }
+        if (length >= 4 && (sourcePort == 80 || destinationPort == 80)) {
+            val text = runCatching { String(packet, offset, minOf(length, 128), Charsets.UTF_8) }.getOrNull().orEmpty()
+            if (text.startsWith("GET ") || text.startsWith("POST ") || text.startsWith("PUT ") || text.startsWith("DELETE ")) {
+                val firstLine = text.lineSequence().firstOrNull().orEmpty()
+                BridgeLogStore.info("VPN HTTP $sourceIp:$sourcePort -> $destinationIp:$destinationPort request=$firstLine")
+            }
+        }
+    }
+
+    private fun parseTlsClientHello(
+        packet: ByteArray,
+        offset: Int,
+        length: Int,
+        sourceIp: String,
+        sourcePort: Int,
+        destinationIp: String,
+        destinationPort: Int,
+    ) {
+        if (length < 9) return
+        val recordLength = readUnsignedShort(packet, offset + 3)
+        if (recordLength <= 0 || recordLength + 5 > length) return
+        val handshakeType = packet[offset + 5].toInt() and 0xFF
+        if (handshakeType != 0x01) return
+        var cursor = offset + 9
+        if (cursor + 2 > offset + length) return
+        cursor += 2 // client_version
+        cursor += 32 // random
+        if (cursor >= offset + length) return
+        val sessionIdLength = packet[cursor].toInt() and 0xFF
+        cursor += 1 + sessionIdLength
+        if (cursor + 2 > offset + length) return
+        val cipherSuiteLength = readUnsignedShort(packet, cursor)
+        cursor += 2 + cipherSuiteLength
+        if (cursor >= offset + length) return
+        val compressionMethodsLength = packet[cursor].toInt() and 0xFF
+        cursor += 1 + compressionMethodsLength
+        if (cursor + 2 > offset + length) return
+        val extensionsLength = readUnsignedShort(packet, cursor)
+        cursor += 2
+        val extensionsEnd = minOf(cursor + extensionsLength, offset + length)
+        while (cursor + 4 <= extensionsEnd) {
+            val extensionType = readUnsignedShort(packet, cursor)
+            val extensionLength = readUnsignedShort(packet, cursor + 2)
+            cursor += 4
+            if (cursor + extensionLength > extensionsEnd) return
+            if (extensionType == 0x0000 && extensionLength >= 5) {
+                val listLength = readUnsignedShort(packet, cursor)
+                var listCursor = cursor + 2
+                val listEnd = minOf(listCursor + listLength, cursor + extensionLength)
+                while (listCursor + 3 <= listEnd) {
+                    val nameType = packet[listCursor].toInt() and 0xFF
+                    val nameLength = readUnsignedShort(packet, listCursor + 1)
+                    listCursor += 3
+                    if (listCursor + nameLength > listEnd) break
+                    if (nameType == 0x00) {
+                        val serverName = String(packet, listCursor, nameLength, Charsets.UTF_8)
+                        BridgeLogStore.info("VPN TLS SNI $sourceIp:$sourcePort -> $destinationIp:$destinationPort host=$serverName")
+                        BaseusVpnCaptureStateStore.update {
+                            it.copy(message = "TLS SNI $serverName", targetIp = targetIp)
+                        }
+                        return
+                    }
+                    listCursor += nameLength
+                }
+            }
+            cursor += extensionLength
         }
     }
 
