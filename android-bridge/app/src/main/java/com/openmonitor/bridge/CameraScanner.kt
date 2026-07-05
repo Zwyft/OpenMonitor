@@ -22,22 +22,49 @@ class CameraScanner(
     private val password: String = "",
 ) {
     private val rtspPorts = listOf(554, 8554)
-    private val commonRtspPaths = listOf(
-        "/",
-        "/live",
-        "/live0",
-        "/live1",
-        "/stream",
-        "/stream1",
-        "/h264",
-        "/onvif1",
-        "/videoMain",
-        "/videoSub",
-        "/0",
-        "/1",
-        "/axis-media/media.amp",
-        "/cam/realmonitor?channel=1&subtype=0",
-        "/cam/realmonitor?channel=1&subtype=1",
+    private val rtspPathPresets = listOf(
+        RtspPathPreset("Baseus / generic", listOf(
+            "/",
+            "/live",
+            "/live0",
+            "/live1",
+            "/stream",
+            "/stream1",
+            "/h264",
+            "/onvif1",
+            "/videoMain",
+            "/videoSub",
+            "/0",
+            "/1",
+        )),
+        RtspPathPreset("Hikvision / OEM", listOf(
+            "/Streaming/Channels/101",
+            "/Streaming/Channels/102",
+            "/Streaming/channels/101",
+            "/Streaming/channels/102",
+        )),
+        RtspPathPreset("Dahua / Amcrest", listOf(
+            "/cam/realmonitor?channel=1&subtype=0",
+            "/cam/realmonitor?channel=1&subtype=1",
+            "/cam/realmonitor?channel=1&subtype=2",
+        )),
+        RtspPathPreset("Axis", listOf(
+            "/axis-media/media.amp",
+            "/axis-media/media.amp?camera=1&audio=0&video=0",
+            "/axis-media/media.amp?adjustablelivestream=1",
+        )),
+        RtspPathPreset("Reolink / Foscam", listOf(
+            "/h264Preview_01_main",
+            "/h264Preview_01_sub",
+            "/videoMain",
+            "/videoSub",
+        )),
+        RtspPathPreset("Uniview / generic", listOf(
+            "/live/ch00_0",
+            "/live/ch00_1",
+            "/stream1",
+            "/stream2",
+        )),
     )
 
     fun scan(onProgress: (String) -> Unit): List<CameraDiscovery> {
@@ -220,29 +247,32 @@ class CameraScanner(
             }
         }
 
-        for (path in commonRtspPaths) {
-            val candidate = buildRtspUrl(host, port, path)
-            onProgress("Testing $candidate")
-            val outcome = probeRtsp(candidate)
-            when (outcome) {
-                RtspProbeResult.Valid -> {
-                    return CameraDiscovery(
-                        label = "$host:$port",
-                        streamUrl = candidate,
-                        source = "RTSP probe",
-                        details = path,
-                    )
-                }
-                RtspProbeResult.AuthRequired -> {
-                    return CameraDiscovery(
-                        label = "$host:$port",
-                        streamUrl = candidate,
-                        source = "RTSP probe",
-                        details = "$path (auth required)",
-                        needsAuth = true,
-                    )
-                }
-                RtspProbeResult.Invalid -> {
+        for (preset in rtspPathPresets) {
+            for (path in preset.paths) {
+                val candidate = buildRtspUrl(host, port, path)
+                onProgress("Testing ${preset.name}: $candidate")
+                val outcome = probeRtsp(candidate)
+                when (outcome) {
+                    RtspProbeResult.Valid -> {
+                        return CameraDiscovery(
+                            label = "$host:$port",
+                            streamUrl = applyCredentials(candidate),
+                            source = "RTSP probe",
+                            details = "${preset.name} $path",
+                            needsAuth = false,
+                        )
+                    }
+                    RtspProbeResult.AuthRequired -> {
+                        return CameraDiscovery(
+                            label = "$host:$port",
+                            streamUrl = applyCredentials(candidate),
+                            source = "RTSP probe",
+                            details = "${preset.name} $path (auth required)",
+                            needsAuth = true,
+                        )
+                    }
+                    RtspProbeResult.Invalid -> {
+                    }
                 }
             }
         }
@@ -440,6 +470,11 @@ class CameraScanner(
     private fun buildRtspUrl(host: String, port: Int, path: String): String {
         return "rtsp://$host:$port$path"
     }
+
+    private data class RtspPathPreset(
+        val name: String,
+        val paths: List<String>,
+    )
 
     private fun applyCredentials(url: String): String {
         if (username.isBlank()) return url

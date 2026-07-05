@@ -8,6 +8,7 @@ This is a phone-hosted RTSP-to-HLS bridge app.
 - Uses LibVLC to convert RTSP into HLS in app cache.
 - Serves the HLS playlist and segments over HTTP so another device can open them in a browser.
 - Scans the LAN for ONVIF and RTSP cameras and tries to resolve a usable stream URI automatically.
+- Probes common vendor RTSP path patterns including Hikvision, Dahua/Amcrest, Axis, Reolink, Foscam, and Uniview-style paths.
 
 ## What it does not do yet
 - Baseus-specific reverse engineering.
@@ -30,6 +31,7 @@ This is a phone-hosted RTSP-to-HLS bridge app.
 ## Troubleshooting
 - If you see `Timed out waiting for HLS output`, check the log tail for a VLC event or a startup exception.
 - If the HLS URL returns `Not found`, make sure you are using the current phone IP shown on the bridge screen.
+- If the scanner finds the camera IP but no stream, the camera may use a vendor path outside the current probe list and we can add it next.
 
 ## GitHub Actions
 - A workflow at `.github/workflows/build-android-bridge-apk.yml` builds a debug APK and uploads it as an artifact.
