@@ -27,6 +27,11 @@ class VicohomeClient(
                     devices = devices,
                     events = events,
                     message = "Loaded ${devices.size} device(s) and ${events.size} event(s) from ${region.label}",
+                    session = VicohomeSession(
+                        email = email,
+                        token = token,
+                        region = region,
+                    ),
                 )
             } catch (exception: Exception) {
                 lastFailure = exception
@@ -40,6 +45,47 @@ class VicohomeClient(
         throw lastFailure ?: IllegalStateException("Vicohome sync failed")
     }
 
+    fun fetchLiveTicket(session: VicohomeSession, serialNumber: String): VicohomeLiveTicket {
+        val payload = JSONObject()
+            .put("serialNumber", serialNumber)
+            .put("countryNo", session.region.countryNo)
+            .put("requestId", generateRequestID())
+            .put("language", "en")
+            .put("supportUnlimitedWebsocket", true)
+            .put("list", org.json.JSONArray())
+            .put(
+                "app",
+                JSONObject()
+                    .put("versionName", "3.50.0(2f68e2)")
+                    .put("bundle", "addx.ai.vicoo")
+                    .put("timeZone", java.util.TimeZone.getDefault().id)
+                    .put("appName", "VicoHome")
+                    .put("tenantId", "vicoo")
+                    .put("env", "prod-k8s")
+                    .put("version", 14148)
+                    .put("appType", "iOS"),
+            )
+
+        val response = postJson(
+            session.region.webrtcApiBase,
+            "/device/getWebrtcTicket",
+            payload,
+            session.token,
+            bearerToken = true,
+        )
+        val responseObject = JSONObject(response)
+        val resultCode = responseObject.optInt("result", -1)
+        if (resultCode != 0) {
+            val message = responseObject.optString("msg", "unknown error")
+            throw IllegalStateException("Live ticket request failed (${session.region.label}): $message")
+        }
+        val data = responseObject.optJSONObject("data") ?: throw IllegalStateException("Live ticket response missing data")
+        val ticket = parseLiveTicket(data)
+        return ticket.copy(
+            accessToken = ticket.accessToken.ifBlank { session.token },
+        )
+    }
+
     private fun login(region: VicohomeRegion): String {
         val payload = JSONObject()
             .put("email", email)
@@ -48,7 +94,7 @@ class VicohomeClient(
             .put("countryNo", region.countryNo)
             .put("language", "en")
 
-        val response = postJson(region, "/account/login", payload)
+        val response = postJson(region.apiBase, "/account/login", payload)
         val responseObject = JSONObject(response)
         val resultCode = responseObject.optInt("result", -1)
         if (resultCode != 0) {
@@ -72,7 +118,7 @@ class VicohomeClient(
             .put("countryNo", region.countryNo)
 
         val response = postJson(
-            region,
+            region.apiBase,
             "/device/listuserdevices",
             payload,
             token,
@@ -118,7 +164,7 @@ class VicohomeClient(
             .put("countryNo", region.countryNo)
 
         val response = postJson(
-            region,
+            region.apiBase,
             "/library/newselectlibrary",
             payload,
             token,
@@ -154,17 +200,23 @@ class VicohomeClient(
         return events
     }
 
-    private fun postJson(region: VicohomeRegion, path: String, payload: JSONObject, token: String? = null): String {
-        val connection = (URL(region.apiBase.trimEnd('/') + path).openConnection() as HttpURLConnection).apply {
+    private fun postJson(
+        baseUrl: String,
+        path: String,
+        payload: JSONObject,
+        token: String? = null,
+        bearerToken: Boolean = false,
+    ): String {
+        val connection = (URL(baseUrl.trimEnd('/') + path).openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 5000
             readTimeout = 7000
             doOutput = true
             setRequestProperty("Content-Type", "application/json")
             setRequestProperty("Accept", "application/json")
-            setRequestProperty("User-Agent", "OpenMonitorBridge/1.0 (${region.label})")
+            setRequestProperty("User-Agent", "OpenMonitorBridge/1.0")
             if (!token.isNullOrBlank()) {
-                setRequestProperty("Authorization", token)
+                setRequestProperty("Authorization", if (bearerToken) "Bearer $token" else token)
             }
         }
 
@@ -181,6 +233,42 @@ class VicohomeClient(
         } finally {
             connection.disconnect()
         }
+    }
+
+    private fun parseLiveTicket(data: JSONObject): VicohomeLiveTicket {
+        val iceServers = mutableListOf<VicohomeIceServer>()
+        val servers = data.optJSONArray("iceServer")
+        if (servers != null) {
+            for (index in 0 until servers.length()) {
+                val server = servers.optJSONObject(index) ?: continue
+                iceServers += VicohomeIceServer(
+                    url = server.optString("url"),
+                    username = server.optString("username"),
+                    credential = server.optString("credential"),
+                    ipAddress = server.optString("ipAddress"),
+                )
+            }
+        }
+        return VicohomeLiveTicket(
+            traceId = data.optString("traceId"),
+            groupId = data.optString("groupId"),
+            role = data.optString("role"),
+            id = data.optString("id"),
+            iceServer = iceServers,
+            signalServer = data.optString("signalServer"),
+            signalServerIpAddress = data.optString("signalServerIpAddress"),
+            sign = data.optString("sign"),
+            signalPingInterval = data.optInt("signalPingInterval"),
+            maxAllocationLimit = data.optInt("maxAllocationLimit"),
+            appStopLiveTimeout = data.optInt("appStopLiveTimeout"),
+            deviceSleepTimeout = data.optInt("deviceSleepTimeout"),
+            time = data.optLong("time"),
+            expirationTime = data.optLong("expirationTime"),
+            websocketPath = data.optString("websocketPath"),
+            accessToken = data.optString("accessToken"),
+            realCxSerialNumber = data.optString("realCxSerialNumber").takeIf { it.isNotBlank() },
+            countryNo = data.optString("countryNo").takeIf { it.isNotBlank() },
+        )
     }
 
     private fun readAll(stream: java.io.InputStream): String {

@@ -30,6 +30,27 @@ data class VicohomeEvent(
     val videoUrl: String,
 )
 
+data class VicohomeSession(
+    val email: String,
+    val token: String,
+    val region: VicohomeRegion,
+    val updatedAtMillis: Long = System.currentTimeMillis(),
+)
+
+object VicohomeSessionStore {
+    private val lock = Any()
+    @Volatile
+    private var session: VicohomeSession? = null
+
+    fun snapshot(): VicohomeSession? = session
+
+    fun update(value: VicohomeSession?) {
+        synchronized(lock) {
+            session = value
+        }
+    }
+}
+
 enum class VicohomeRegionChoice(
     val displayName: String,
 ) {
@@ -41,6 +62,7 @@ enum class VicohomeRegionChoice(
 data class VicohomeRegion(
     val label: String,
     val apiBase: String,
+    val webrtcApiBase: String,
     val countryNo: String,
 )
 
@@ -48,12 +70,14 @@ object VicohomeRegionCatalog {
     val us = VicohomeRegion(
         label = "US",
         apiBase = "https://api-us.vicohome.io",
+        webrtcApiBase = "https://api-us.vicoo.tech",
         countryNo = "US",
     )
 
     val eu = VicohomeRegion(
         label = "EU",
         apiBase = "https://api-eu.vicohome.io",
+        webrtcApiBase = "https://api-eu.vicoo.tech",
         countryNo = "EU",
     )
 
@@ -70,6 +94,35 @@ data class VicohomeSyncResult(
     val devices: List<VicohomeDevice>,
     val events: List<VicohomeEvent>,
     val message: String,
+    val session: VicohomeSession? = null,
+)
+
+data class VicohomeIceServer(
+    val url: String,
+    val username: String,
+    val credential: String,
+    val ipAddress: String,
+)
+
+data class VicohomeLiveTicket(
+    val traceId: String,
+    val groupId: String,
+    val role: String,
+    val id: String,
+    val iceServer: List<VicohomeIceServer>,
+    val signalServer: String,
+    val signalServerIpAddress: String,
+    val sign: String,
+    val signalPingInterval: Int,
+    val maxAllocationLimit: Int,
+    val appStopLiveTimeout: Int,
+    val deviceSleepTimeout: Int,
+    val time: Long,
+    val expirationTime: Long,
+    val websocketPath: String,
+    val accessToken: String,
+    val realCxSerialNumber: String?,
+    val countryNo: String?,
 )
 
 object VicohomeDataStore {

@@ -348,6 +348,7 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
                 VicohomeDataStore.update(result)
+                result.session?.let { VicohomeSessionStore.update(it) }
                 runOnUiThread {
                     scanStatusView.text = result.message
                     renderVicohomeEntries()
@@ -433,10 +434,21 @@ class MainActivity : AppCompatActivity() {
     private fun renderVicohomeEntries() {
         val devices = VicohomeDataStore.snapshotDevices()
         val events = VicohomeDataStore.snapshotEvents()
+        val session = VicohomeSessionStore.snapshot()
+        val liveUrl = "${NetworkUtils.serverUrl(BridgeConfig.HTTP_PORT)}/live"
         vicohomeContainer.removeAllViews()
 
         vicohomeContainer.addView(TextView(this).apply {
             text = VicohomeDataStore.snapshotMessage().ifBlank { "No Baseus cloud data loaded yet." }
+            setTextColor(0xFF94A3B8.toInt())
+        })
+
+        vicohomeContainer.addView(TextView(this).apply {
+            text = if (session == null) {
+                "Live viewer: sync Baseus cloud data first, then open $liveUrl on another device."
+            } else {
+                "Live viewer ready for ${session.region.label}. Open $liveUrl on another device."
+            }
             setTextColor(0xFF94A3B8.toInt())
         })
 

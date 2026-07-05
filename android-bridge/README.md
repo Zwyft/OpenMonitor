@@ -11,6 +11,7 @@ This is a phone-hosted RTSP-to-HLS bridge app.
 - Probes common vendor RTSP path patterns including Hikvision, Dahua/Amcrest, Axis, Reolink, Foscam, and Uniview-style paths.
 - Logs into Vicohome/Baseus cloud accounts and pulls recent device/event clips from the cloud API.
 - Tries Vicohome cloud regions automatically first, then lets you force US or EU if your account is region-bound.
+- Stores the active cloud session in memory so the phone-hosted `/live` page can request a WebRTC ticket and play live video directly in Safari.
 - Starts a local HTTP proxy on the phone so you can route the Baseus app through it and capture its cloud endpoints.
 - Starts a VPN-based packet capture mode for the Baseus app when proxy capture is ignored.
 
@@ -57,12 +58,15 @@ This is a phone-hosted RTSP-to-HLS bridge app.
 - If you need the logs after a crash and the page does not load, use `Copy full logs` in the app before restarting it.
 - If Vicohome sync fails with `account not registered`, switch the region picker from `Auto` to `US` or `EU` and retry.
 - If Vicohome sync succeeds but clips still fail to play, the cloud URL may be expiring too quickly or the account may require a different region/API host.
+- If the cloud account sync succeeds, open `http://<phone-ip>:18480/live` from the iPad to start the Baseus cloud live viewer.
+- If the live viewer says the cloud session is missing, re-run `Vicohome sync` in the Android app first.
+- If the live viewer opens but never shows video, the cloud service may be rejecting browser-only signaling on your account or region and we will need a relay step next.
 
 ## GitHub Actions
 - A workflow at `.github/workflows/build-android-bridge-apk.yml` builds a debug APK and uploads it as an artifact.
 - The workflow runs on pushes to `main` and `codex/build-ipa-ci`, and it can also be started manually.
 
 ## Recommended next step
-- If you still need more camera compatibility, the next pass is vendor-specific path probing and auth handling for the Baseus cameras.
-- If you still need more camera compatibility, the next pass is app-traffic capture or camera/hub firmware analysis for the Baseus cameras.
-- If you need live feeds and the Vicohome cloud only exposes event clips, the next pass is traffic capture from the Baseus app itself.
+- If you need Baseus live video, open `http://<phone-ip>:18480/live` after cloud sync and use the browser WebRTC viewer.
+- If live video still fails, the next pass is cloud-session debugging or a signaling relay on the phone.
+- If you still need more camera compatibility after that, the fallback path is app-traffic capture or vendor-specific camera/hub analysis.

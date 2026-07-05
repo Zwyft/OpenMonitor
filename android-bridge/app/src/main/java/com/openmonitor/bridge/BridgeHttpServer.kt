@@ -56,18 +56,22 @@ class BridgeHttpServer(
             val method = parts[0]
             val rawPath = parts[1]
             val path = rawPath.substringBefore("?")
+            val query = rawPath.substringAfter("?", "")
 
             consumeHeaders(input)
 
             when {
                 method == "GET" && path == "/" -> respondText(output, 200, "text/html; charset=utf-8", rootPage())
+                method == "GET" && path == "/live" -> respondText(output, 200, "text/html; charset=utf-8", baseusCloudLivePage(baseUrl()))
                 method == "GET" && path == "/api/state" -> respondText(output, 200, "application/json; charset=utf-8", BridgeStateStore.snapshot().toJson())
                 method == "GET" && path == "/api/logs" -> respondText(output, 200, "application/json; charset=utf-8", logsJson())
                 method == "GET" && path == "/api/logs.txt" -> respondDownload(output, "text/plain; charset=utf-8", "openmonitor-bridge.log", logsText(1000))
                 method == "GET" && path == "/api/vpn/state" -> respondText(output, 200, "application/json; charset=utf-8", vpnStateJson())
+                method == "GET" && path == "/api/vicohome/session" -> respondText(output, 200, "application/json; charset=utf-8", vicohomeSessionJson())
                 method == "GET" && path == "/api/cameras" -> respondText(output, 200, "application/json; charset=utf-8", camerasJson())
                 method == "GET" && path == "/api/vicohome/devices" -> respondText(output, 200, "application/json; charset=utf-8", vicohomeDevicesJson())
                 method == "GET" && path == "/api/vicohome/events" -> respondText(output, 200, "application/json; charset=utf-8", vicohomeEventsJson())
+                method == "GET" && path == "/api/vicohome/live-ticket" -> respondText(output, liveTicketStatus(query), "application/json; charset=utf-8", liveTicketJson(query))
                 method == "GET" && path.startsWith("/hls/") -> serveFile(output, path.removePrefix("/hls/"))
                 else -> respondText(output, 404, "text/plain; charset=utf-8", "Not found")
             }
@@ -96,7 +100,7 @@ class BridgeHttpServer(
             <body>
               <div class="card">
                 <h1>OpenMonitor Bridge</h1>
-                <p class="muted">Phone-hosted RTSP to HLS bridge.</p>
+                <p class="muted">Phone-hosted RTSP bridge and Baseus cloud live viewer.</p>
                 <p>Server: <code>${escapeHtml(serverUrl)}</code></p>
                 <p>Status: <strong>${escapeHtml(state.status)}</strong></p>
                 <p>Message: ${escapeHtml(state.message)}</p>
@@ -108,8 +112,9 @@ class BridgeHttpServer(
                 </div>
                 <h2>Baseus cloud data</h2>
                 <div style="background:#0b1220; border-radius:12px; padding:12px; max-height:320px; overflow:auto;">
-                  ${vicohomeListHtml()}
+                  ${vicohomeListHtml(serverUrl)}
                 </div>
+                <p><a href="${escapeHtml("$serverUrl/live")}">Open Baseus cloud live viewer</a></p>
                 <h2>Baseus proxy capture</h2>
                 <div style="background:#0b1220; border-radius:12px; padding:12px; max-height:180px; overflow:auto;">
                   ${proxyCaptureHtml()}
@@ -121,7 +126,7 @@ class BridgeHttpServer(
                 <h2>Logs</h2>
                 <pre style="white-space: pre-wrap; word-break: break-word; background:#0b1220; border-radius:12px; padding:12px; max-height:320px; overflow:auto;">${escapeHtml(logsText(40))}</pre>
                 <p><a href="${escapeHtml("$serverUrl/api/logs.txt")}">Download full log file</a></p>
-                <p class="muted">Use the Android app to start or stop the bridge. Open the HLS URL from another device on the same Wi‑Fi.</p>
+                <p class="muted">Use the Android app to start or stop the bridge. Open the HLS URL for RTSP streams or the /live page for Baseus cloud live video from another device on the same Wi‑Fi.</p>
               </div>
             </body>
             </html>
@@ -172,7 +177,11 @@ class BridgeHttpServer(
     private fun respondBytes(output: BufferedOutputStream, status: Int, contentType: String, body: ByteArray) {
         val reason = when (status) {
             200 -> "OK"
+            400 -> "Bad Request"
+            401 -> "Unauthorized"
+            403 -> "Forbidden"
             404 -> "Not Found"
+            409 -> "Conflict"
             500 -> "Internal Server Error"
             else -> "OK"
         }
@@ -276,6 +285,68 @@ class BridgeHttpServer(
         }
     }
 
+    private fun vicohomeSessionJson(): String {
+        val session = VicohomeSessionStore.snapshot()
+        return buildString {
+            append('{')
+            append("\"available\":")
+            append(session != null)
+            append(",\"message\":\"")
+            append(
+                when (session) {
+                    null -> "No Baseus cloud session loaded yet."
+                    else -> "Baseus cloud session ready for ${session.region.label}"
+                }.jsonEscape(),
+            )
+            append("\",\"email\":\"")
+            append(session?.email.orEmpty().jsonEscape())
+            append("\",\"region\":\"")
+            append(session?.region?.label.orEmpty().jsonEscape())
+            append("\",\"apiBase\":\"")
+            append(session?.region?.apiBase.orEmpty().jsonEscape())
+            append("\",\"webrtcApiBase\":\"")
+            append(session?.region?.webrtcApiBase.orEmpty().jsonEscape())
+            append("\",\"updatedAtMillis\":")
+            append(session?.updatedAtMillis ?: 0L)
+            append('}')
+        }
+    }
+
+    private fun liveTicketStatus(query: String): Int {
+        val session = VicohomeSessionStore.snapshot()
+        return when {
+            session == null -> 409
+            extractQueryParam(query, "serial").isBlank() -> 400
+            else -> 200
+        }
+    }
+
+    private fun liveTicketJson(query: String): String {
+        val session = VicohomeSessionStore.snapshot()
+            ?: return errorJson("Baseus cloud session not loaded yet. Run Vicohome sync first.")
+        val serial = extractQueryParam(query, "serial")
+        if (serial.isBlank()) {
+            return errorJson("Missing serial parameter.")
+        }
+        return try {
+            val ticket = VicohomeClient("", "").fetchLiveTicket(session, serial)
+            buildString {
+                append('{')
+                append("\"message\":\"Live ticket ready\",")
+                append("\"serialNumber\":\"")
+                append(serial.jsonEscape())
+                append("\",\"region\":\"")
+                append(session.region.label.jsonEscape())
+                append("\",\"ticket\":")
+                append(ticket.toJson())
+                append('}')
+            }
+        } catch (exception: Exception) {
+            BridgeLogStore.error("Live ticket request failed: ${exception.stackTraceToString()}")
+            errorJson(exception.message ?: "Live ticket request failed")
+        }
+    }
+
     private fun camerasListHtml(): String {
         val cameras = CameraDiscoveryStore.snapshot()
         if (cameras.isEmpty()) {
@@ -331,13 +402,23 @@ class BridgeHttpServer(
         }
     }
 
-    private fun vicohomeListHtml(): String {
+    private fun vicohomeListHtml(serverUrl: String): String {
         val devices = VicohomeDataStore.snapshotDevices()
         val events = VicohomeDataStore.snapshotEvents()
         val message = VicohomeDataStore.snapshotMessage().ifBlank { "No Baseus cloud data loaded yet." }
+        val session = VicohomeSessionStore.snapshot()
         return buildString {
             append("<div class=\"muted\">")
             append(escapeHtml(message))
+            append("</div>")
+            append("<div class=\"muted\">")
+            append(
+                if (session == null) {
+                    "Live viewer is unavailable until you sync the Baseus cloud account in the Android app."
+                } else {
+                    "Live viewer ready for ${session.region.label}. Open <a href=\"${escapeHtml("$serverUrl/live")}\">/live</a> from Safari."
+                },
+            )
             append("</div>")
             if (devices.isNotEmpty()) {
                 append("<h3>Devices</h3>")
@@ -470,6 +551,24 @@ class BridgeHttpServer(
         }
     }
 
+    private fun errorJson(message: String): String {
+        return buildString {
+            append('{')
+            append("\"message\":\"")
+            append(message.jsonEscape())
+            append("\"}")
+        }
+    }
+
+    private fun extractQueryParam(query: String, key: String): String {
+        if (query.isBlank()) return ""
+        return query.split('&')
+            .firstOrNull { it.startsWith("$key=") }
+            ?.substringAfter('=')
+            ?.let { java.net.URLDecoder.decode(it, StandardCharsets.UTF_8) }
+            .orEmpty()
+    }
+
     private fun proxyCaptureHtml(): String {
         val state = ProxyCaptureStateStore.snapshot()
         return buildString {
@@ -532,6 +631,62 @@ private fun BridgeState.toJson(): String {
         append("\",\"updatedAtMillis\":")
         append(updatedAtMillis)
         append('}')
+    }
+}
+
+private fun VicohomeLiveTicket.toJson(): String {
+    return buildString {
+        append('{')
+        append("\"traceId\":\"")
+        append(traceId.jsonEscape())
+        append("\",\"groupId\":\"")
+        append(groupId.jsonEscape())
+        append("\",\"role\":\"")
+        append(role.jsonEscape())
+        append("\",\"id\":\"")
+        append(id.jsonEscape())
+        append("\",\"iceServer\":[")
+        iceServer.forEachIndexed { index, server ->
+            if (index > 0) append(',')
+            append('{')
+            append("\"url\":\"")
+            append(server.url.jsonEscape())
+            append("\",\"username\":\"")
+            append(server.username.jsonEscape())
+            append("\",\"credential\":\"")
+            append(server.credential.jsonEscape())
+            append("\",\"ipAddress\":\"")
+            append(server.ipAddress.jsonEscape())
+            append("\"}")
+        }
+        append("]")
+        append(",\"signalServer\":\"")
+        append(signalServer.jsonEscape())
+        append("\",\"signalServerIpAddress\":\"")
+        append(signalServerIpAddress.jsonEscape())
+        append("\",\"sign\":\"")
+        append(sign.jsonEscape())
+        append("\",\"signalPingInterval\":")
+        append(signalPingInterval)
+        append(",\"maxAllocationLimit\":")
+        append(maxAllocationLimit)
+        append(",\"appStopLiveTimeout\":")
+        append(appStopLiveTimeout)
+        append(",\"deviceSleepTimeout\":")
+        append(deviceSleepTimeout)
+        append(",\"time\":")
+        append(time)
+        append(",\"expirationTime\":")
+        append(expirationTime)
+        append(",\"websocketPath\":\"")
+        append(websocketPath.jsonEscape())
+        append("\",\"accessToken\":\"")
+        append(accessToken.jsonEscape())
+        append("\",\"realCxSerialNumber\":\"")
+        append(realCxSerialNumber.orEmpty().jsonEscape())
+        append("\",\"countryNo\":\"")
+        append(countryNo.orEmpty().jsonEscape())
+        append("\"}")
     }
 }
 
