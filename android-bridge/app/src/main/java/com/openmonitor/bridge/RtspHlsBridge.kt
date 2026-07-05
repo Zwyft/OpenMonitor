@@ -38,8 +38,8 @@ class RtspHlsBridge(
         bridgeDir.mkdirs()
 
         val playlistFile = File(bridgeDir, "index.m3u8")
-        val segmentPattern = File(bridgeDir, "segment-%05d.ts").absolutePath
-        val localIndexUrl = "segment-%05d.ts"
+        val segmentPattern = File(bridgeDir, "segment-########.ts").absolutePath
+        val localIndexUrl = "segment-########.ts"
         val sout = buildSout(playlistFile.absolutePath, segmentPattern, localIndexUrl)
 
         notifyState(
@@ -58,6 +58,7 @@ class RtspHlsBridge(
                     "--quiet",
                     "--no-video-title-show",
                     "--no-audio-time-stretch",
+                    "--rtsp-tcp",
                     "--network-caching=1000",
                     "--sout-keep",
                 )
