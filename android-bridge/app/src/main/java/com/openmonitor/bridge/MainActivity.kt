@@ -3,7 +3,9 @@ package com.openmonitor.bridge
 import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -471,6 +473,12 @@ class MainActivity : AppCompatActivity() {
                     }
                     setTextColor(0xFFE2E8F0.toInt())
                 })
+                vicohomeContainer.addView(Button(this).apply {
+                    text = "Open live"
+                    setOnClickListener {
+                        openBaseusLive(device.serialNumber, device.ip)
+                    }
+                })
             }
         }
 
@@ -534,6 +542,26 @@ class MainActivity : AppCompatActivity() {
         }
         vpnStartButton.isEnabled = !state.running
         vpnStopButton.isEnabled = state.running
+    }
+
+    private fun openBaseusLive(serialNumber: String, ipAddress: String) {
+        val serverUrl = NetworkUtils.serverUrl(BridgeConfig.HTTP_PORT)
+        val targetUrl = buildString {
+            append(serverUrl)
+            append("/live?serial=")
+            append(Uri.encode(serialNumber))
+            if (ipAddress.isNotBlank()) {
+                append("&ip=")
+                append(Uri.encode(ipAddress))
+            }
+        }
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(targetUrl)))
+            scanStatusView.text = "Opening live viewer for ${ipAddress.ifBlank { serialNumber }}"
+        } catch (exception: Exception) {
+            BridgeLogStore.error("Failed to open live viewer: ${exception.stackTraceToString()}")
+            scanStatusView.text = "Unable to open live viewer: ${exception.message ?: "unknown error"}"
+        }
     }
 
     private fun selectedVpnMode(): VpnCaptureMode {

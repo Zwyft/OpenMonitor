@@ -424,6 +424,15 @@ class BridgeHttpServer(
                 append("<h3>Devices</h3>")
                 append("<ul style=\"margin:0; padding-left:20px;\">")
                 devices.forEach { device ->
+                    val liveLink = buildString {
+                        append(serverUrl)
+                        append("/live?serial=")
+                        append(java.net.URLEncoder.encode(device.serialNumber, "UTF-8"))
+                        if (device.ip.isNotBlank()) {
+                            append("&ip=")
+                            append(java.net.URLEncoder.encode(device.ip, "UTF-8"))
+                        }
+                    }
                     append("<li style=\"margin-bottom:8px;\">")
                     append("<div><strong>")
                     append(escapeHtml(device.deviceName.ifBlank { device.serialNumber }))
@@ -433,6 +442,9 @@ class BridgeHttpServer(
                         append(" — ")
                         append(escapeHtml(device.ip))
                     }
+                    append(" — <a href=\"")
+                    append(escapeHtml(liveLink))
+                    append("\">Open live</a>")
                     append("</div>")
                     if (device.locationName.isNotBlank()) {
                         append("<div class=\"muted\">")

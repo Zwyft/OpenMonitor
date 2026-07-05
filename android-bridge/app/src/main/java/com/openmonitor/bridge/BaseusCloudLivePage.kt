@@ -257,7 +257,7 @@ fun baseusCloudLivePage(serverUrl: String): String {
               });
             }
 
-            function loadDevices(selectDefaultSerial) {
+            function loadDevices(selectDefaultSerial, selectDefaultIp) {
               requestJSON("GET", "/api/vicohome/devices", null, function (error, response) {
                 if (error) {
                   log("Device load failed: " + error.message);
@@ -277,10 +277,21 @@ fun baseusCloudLivePage(serverUrl: String): String {
                   var option = document.createElement("option");
                   option.value = device.serialNumber || "";
                   option.textContent = (device.deviceName || device.serialNumber || "Camera") + " • " + (device.modelNo || "unknown model");
+                  if (selectDefaultIp && device.ip && device.ip === selectDefaultIp) {
+                    option.selected = true;
+                  }
                   deviceSelect.appendChild(option);
                 }
-                if (selectDefaultSerial) {
+                if (!deviceSelect.value && selectDefaultSerial) {
                   deviceSelect.value = selectDefaultSerial;
+                }
+                if (selectDefaultSerial && selectDefaultIp && !deviceSelect.value) {
+                  for (var j = 0; j < devices.length; j += 1) {
+                    if ((devices[j].ip || "") === selectDefaultIp) {
+                      deviceSelect.value = devices[j].serialNumber || "";
+                      break;
+                    }
+                  }
                 }
               });
             }
@@ -585,7 +596,7 @@ fun baseusCloudLivePage(serverUrl: String): String {
             }
 
             refreshButton.onclick = function () {
-              loadDevices(currentSerial);
+              loadDevices(currentSerial, preferredIp);
             };
             startButton.onclick = startLive;
             stopButton.onclick = stopLive;
@@ -593,8 +604,30 @@ fun baseusCloudLivePage(serverUrl: String): String {
               log("Selected " + (deviceSelect.options[deviceSelect.selectedIndex] ? deviceSelect.options[deviceSelect.selectedIndex].text : "camera"));
             };
 
+            var urlParams = new URLSearchParams(window.location.search);
+            var preferredSerial = urlParams.get("serial") || "";
+            var preferredIp = urlParams.get("ip") || "";
+            var autoStart = urlParams.get("autostart") === "1";
+
             loadSession();
-            loadDevices("");
+            loadDevices(preferredSerial, preferredIp);
+            if (autoStart && (preferredSerial || preferredIp)) {
+              window.setTimeout(function () {
+                if (preferredSerial) {
+                  deviceSelect.value = preferredSerial;
+                }
+                if (!deviceSelect.value && preferredIp) {
+                  for (var i = 0; i < deviceSelect.options.length; i += 1) {
+                    var text = deviceSelect.options[i].text || "";
+                    if (text.indexOf(preferredIp) !== -1) {
+                      deviceSelect.selectedIndex = i;
+                      break;
+                    }
+                  }
+                }
+                startLive();
+              }, 500);
+            }
             setControlsRunning(false);
           })();
           </script>
