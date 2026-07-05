@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <title>OpenMonitor Control Deck</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="backdrop"></div>
+  <div class="grid"></div>
+
+  <div class="shell">
+    <aside class="sidebar panel">
+      <div class="eyebrow">OpenMonitor / Browser Mode</div>
+      <h1>Security camera control deck</h1>
+      <p class="lede">
+        Run this on your laptop and open it from the iPad. The native app stays in the repo for later.
+      </p>
+
+      <div class="status-row">
+        <div>
+          <div class="status-label">Status</div>
+          <div id="statusText" class="status-value">Connecting…</div>
+        </div>
+        <div class="badge" id="refreshBadge">Idle</div>
+      </div>
+
+      <div class="actions">
+        <button id="refreshButton" class="button primary">Rescan</button>
+        <button id="deepScanButton" class="button">Deep Scan</button>
+      </div>
+
+      <div class="meta-row">
+        <div>
+          <div class="status-label">Last refresh</div>
+          <div id="lastRefresh" class="status-value">—</div>
+        </div>
+        <div>
+          <div class="status-label">Found</div>
+          <div id="cameraCount" class="status-value">0</div>
+        </div>
+      </div>
+
+      <div class="list-header">
+        <span>Discovered cameras</span>
+        <span class="tiny">Tap one to open it</span>
+      </div>
+
+      <div id="cameraList" class="camera-list"></div>
+
+      <form id="manualForm" class="manual panel-inner">
+        <div class="list-header">
+          <span>Manual endpoint</span>
+          <span class="tiny">RTSP, HLS, or ONVIF</span>
+        </div>
+        <label>Mode
+          <select id="modeSelect">
+            <option value="rtsp">RTSP</option>
+            <option value="hls">HLS</option>
+            <option value="onvif">ONVIF</option>
+          </select>
+        </label>
+        <label>Host or IP
+          <input id="hostInput" type="text" placeholder="192.168.1.20" autocomplete="off">
+        </label>
+        <div class="row">
+          <label>Port
+            <input id="portInput" type="text" value="554" autocomplete="off">
+          </label>
+          <label>Path
+            <input id="pathInput" type="text" value="/stream" autocomplete="off">
+          </label>
+        </div>
+        <div class="row">
+          <label>User
+            <input id="userInput" type="text" autocomplete="off">
+          </label>
+          <label>Password
+            <input id="passwordInput" type="password" autocomplete="off">
+          </label>
+        </div>
+        <button class="button primary full" type="submit">Add camera</button>
+      </form>
+    </aside>
+
+    <main class="main panel">
+      <div class="preview-header">
+        <div>
+          <div class="eyebrow">Live preview</div>
+          <h2 id="selectedTitle">Select a camera</h2>
+          <p id="selectedSubtitle" class="lede compact">The preview will appear here.</p>
+        </div>
+        <div class="preview-pill" id="selectedSource">—</div>
+      </div>
+
+      <div id="previewStage" class="preview-stage">
+        <div class="empty-state">
+          <div class="empty-icon">◌</div>
+          <h3>No camera selected</h3>
+          <p>Use the scan buttons on the left, then tap a camera card.</p>
+        </div>
+      </div>
+
+      <div class="detail-grid">
+        <div class="detail panel-inner">
+          <div class="status-label">Stream URL</div>
+          <div id="streamUrl" class="mono break">—</div>
+        </div>
+        <div class="detail panel-inner">
+          <div class="status-label">Snapshot URL</div>
+          <div id="snapshotUrl" class="mono break">—</div>
+        </div>
+        <div class="detail panel-inner">
+          <div class="status-label">Notes</div>
+          <div id="selectedDetails">—</div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

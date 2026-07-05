@@ -93,3 +93,17 @@ iOSInjectionProject/
 
 #User Added Lines
 *DS_Store*
+
+# Python
+__pycache__/
+*.pyc
+
+# Web runtime artifacts
+web/runtime/
+
+# Android project outputs
+android-bridge/.gradle/
+android-bridge/.idea/
+android-bridge/local.properties
+android-bridge/**/build/
+android-bridge/*.iml
