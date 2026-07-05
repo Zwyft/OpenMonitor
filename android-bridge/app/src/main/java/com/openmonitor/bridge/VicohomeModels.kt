@@ -32,10 +32,23 @@ data class VicohomeEvent(
 
 data class VicohomeSession(
     val email: String,
-    val token: String,
+    val accountAuthToken: String,
+    val xmToken: String,
     val region: VicohomeRegion,
     val privacyConsentUpdated: Boolean = false,
     val updatedAtMillis: Long = System.currentTimeMillis(),
+)
+
+data class VicohomeAccountLogin(
+    val accountInfo: VicohomeAccountInfo,
+    val authToken: String,
+    val pwd: String,
+)
+
+data class VicohomeAccountInfo(
+    val account: String,
+    val accountId: Long,
+    val nickname: String,
 )
 
 object VicohomeSessionStore {

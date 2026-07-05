@@ -27,10 +27,15 @@ class VicohomeClient(
         for ((index, region) in regions.withIndex()) {
             try {
                 onProgress("Logging into Baseus cloud (${region.label})")
-                val token = login(region, onProgress)
-                val privacyConsentUpdated = updatePrivacyConsent(token, region, onProgress)
+                val accountLogin = loginBaseusAccount(region, onProgress)
+                val privacyConsentUpdated = updatePrivacyConsent(accountLogin.authToken, region, onProgress)
+                val xmToken = loginXmSession(accountLogin, region, onProgress)
                 onProgress("Loading Baseus cloud devices (${region.label})")
-                val devices = listDevices(token, region, onProgress)
+                val devices = listDevices(
+                    tokens = listOf(xmToken, accountLogin.authToken).filter { it.isNotBlank() }.distinct(),
+                    region = region,
+                    onProgress = onProgress,
+                )
                 return VicohomeSyncResult(
                     devices = devices,
                     events = emptyList(),
@@ -43,7 +48,8 @@ class VicohomeClient(
                     },
                     session = VicohomeSession(
                         email = email,
-                        token = token,
+                        accountAuthToken = accountLogin.authToken,
+                        xmToken = xmToken,
                         region = region,
                         privacyConsentUpdated = privacyConsentUpdated,
                     ),
@@ -94,7 +100,7 @@ class VicohomeClient(
                     "/device/getWebrtcTicket",
                     payload,
                     session.region,
-                    session.token,
+                    session.xmToken.ifBlank { session.accountAuthToken },
                 )
                 val responseObject = JSONObject(response)
                 val resultCode = responseObject.optInt("code", responseObject.optInt("result", -1))
@@ -105,7 +111,7 @@ class VicohomeClient(
                 val data = responseObject.optJSONObject("data") ?: throw IllegalStateException("Live ticket response missing data")
                 val ticket = parseLiveTicket(data)
                 return ticket.copy(
-                    accessToken = ticket.accessToken.ifBlank { session.token },
+                    accessToken = ticket.accessToken.ifBlank { session.xmToken.ifBlank { session.accountAuthToken } },
                 )
             } catch (exception: Exception) {
                 lastFailure = exception
@@ -118,7 +124,10 @@ class VicohomeClient(
         return "uuid:${UUID.randomUUID()}"
     }
 
-    private fun login(region: VicohomeRegion, onProgress: (String) -> Unit = {}): String {
+    private fun loginBaseusAccount(
+        region: VicohomeRegion,
+        onProgress: (String) -> Unit = {},
+    ): VicohomeAccountLogin {
         val payload = JSONObject()
             .put("type", 0)
             .put("account", email)
@@ -142,9 +151,19 @@ class VicohomeClient(
                     throw IllegalStateException("Login failed (${region.label} @ $baseUrl): $message")
                 }
                 val data = responseObject.optJSONObject("data") ?: throw IllegalStateException("Login failed (${region.label} @ $baseUrl): data missing")
+                val accountInfoObject = data.optJSONObject("accountInfo") ?: throw IllegalStateException("Login failed (${region.label} @ $baseUrl): accountInfo missing")
                 val auth = data.optString("auth").orEmpty()
                 require(auth.isNotBlank()) { "Login failed (${region.label} @ $baseUrl): auth token missing" }
-                return auth
+                val accountLogin = VicohomeAccountLogin(
+                    accountInfo = VicohomeAccountInfo(
+                        account = accountInfoObject.optString("account").ifBlank { email },
+                        accountId = accountInfoObject.optLong("accountId"),
+                        nickname = accountInfoObject.optString("nickname"),
+                    ),
+                    authToken = auth,
+                    pwd = data.optString("pwd").orEmpty(),
+                )
+                return accountLogin
             } catch (exception: Exception) {
                 lastFailure = exception
             }
@@ -152,8 +171,77 @@ class VicohomeClient(
         throw lastFailure ?: IllegalStateException("Login failed (${region.label})")
     }
 
+    private fun loginXmSession(
+        accountLogin: VicohomeAccountLogin,
+        region: VicohomeRegion,
+        onProgress: (String) -> Unit = {},
+    ): String {
+        val hostCandidates = (region.authBaseCandidates + region.apiBaseCandidates).distinct()
+        val loginVariants = listOf(
+            XmLoginVariant(
+                userId = email,
+                password = password,
+            ),
+            XmLoginVariant(
+                userId = email,
+                password = accountLogin.authToken,
+            ),
+            XmLoginVariant(
+                userId = accountLogin.authToken,
+                password = password,
+            ),
+            XmLoginVariant(
+                userId = accountLogin.accountInfo.accountId.toString(),
+                password = password,
+            ),
+            XmLoginVariant(
+                userId = accountLogin.accountInfo.accountId.toString(),
+                password = accountLogin.pwd.ifBlank { password },
+            ),
+            XmLoginVariant(
+                userId = accountLogin.authToken,
+                password = accountLogin.pwd.ifBlank { password },
+            ),
+        )
+        var lastFailure: Exception? = null
+        for (baseUrl in hostCandidates) {
+            for ((variantIndex, variant) in loginVariants.withIndex()) {
+                try {
+                    onProgress("Trying Baseus XM session host $baseUrl (variant ${variantIndex + 1}/${loginVariants.size})")
+                    val payload = JSONObject()
+                        .put("user_id", variant.userId)
+                        .put("password", variant.password)
+                        .put("region", region.shortName)
+                        .put("type", "password")
+                    val response = postXmAction(
+                        baseUrl = baseUrl,
+                        action = "UserLogin",
+                        payload = payload,
+                        region = region,
+                        token = null,
+                    )
+                    val responseObject = JSONObject(response)
+                    val resultCode = responseObject.optInt("code", responseObject.optInt("result", -1))
+                    if (resultCode != 0) {
+                        val message = responseObject.optString("msg", responseObject.optString("message", "unknown error"))
+                        throw IllegalStateException("XM session login failed (${region.label} @ $baseUrl, variant ${variantIndex + 1}): $message")
+                    }
+                    val token = extractXmAccessToken(responseObject)
+                    if (token.isNotBlank()) {
+                        onProgress("Baseus XM session token acquired from $baseUrl")
+                        return token
+                    }
+                    throw IllegalStateException("XM session login returned no access token")
+                } catch (exception: Exception) {
+                    lastFailure = exception
+                }
+            }
+        }
+        throw lastFailure ?: IllegalStateException("XM session login failed (${region.label})")
+    }
+
     private fun listDevices(
-        token: String,
+        tokens: List<String>,
         region: VicohomeRegion,
         onProgress: (String) -> Unit = {},
     ): List<VicohomeDevice> {
@@ -161,33 +249,35 @@ class VicohomeClient(
         var sawSuccessfulResponse = false
         var lastEmptyShape: String? = null
         for (baseUrl in region.apiBaseCandidates) {
-            try {
-                onProgress("Trying Baseus device host $baseUrl")
-                val response = postXmAction(
-                    baseUrl = baseUrl,
-                    action = "GetUserDeviceList",
-                    payload = JSONObject(),
-                    region = region,
-                    token = token,
-                )
-                val responseObject = JSONObject(response)
-                val resultCode = responseObject.optInt("code", responseObject.optInt("result", 0))
-                if (resultCode != 0) {
-                    val message = responseObject.optString("msg", responseObject.optString("message", "unknown error"))
-                    throw IllegalStateException("Device list request failed (${region.label} @ $baseUrl): $message")
-                }
+            for (token in tokens) {
+                try {
+                    onProgress("Trying Baseus device host $baseUrl")
+                    val response = postXmAction(
+                        baseUrl = baseUrl,
+                        action = "GetUserDeviceList",
+                        payload = JSONObject(),
+                        region = region,
+                        token = token,
+                    )
+                    val responseObject = JSONObject(response)
+                    val resultCode = responseObject.optInt("code", responseObject.optInt("result", 0))
+                    if (resultCode != 0) {
+                        val message = responseObject.optString("msg", responseObject.optString("message", "unknown error"))
+                        throw IllegalStateException("Device list request failed (${region.label} @ $baseUrl): $message")
+                    }
 
-                sawSuccessfulResponse = true
-                val devices = parseDeviceList(responseObject)
-                if (devices.isNotEmpty()) {
-                    onProgress("Baseus device host $baseUrl returned ${devices.size} device(s)")
-                    return devices
+                    sawSuccessfulResponse = true
+                    val devices = parseDeviceList(responseObject)
+                    if (devices.isNotEmpty()) {
+                        onProgress("Baseus device host $baseUrl returned ${devices.size} device(s)")
+                        return devices
+                    }
+                    lastEmptyShape = describeDeviceListShape(responseObject)
+                    onProgress("Baseus device host $baseUrl returned no devices: $lastEmptyShape")
+                } catch (exception: Exception) {
+                    lastFailure = exception
+                    onProgress("Baseus device host $baseUrl failed: ${exception.message ?: "unknown error"}")
                 }
-                lastEmptyShape = describeDeviceListShape(responseObject)
-                onProgress("Baseus device host $baseUrl returned no devices: $lastEmptyShape")
-            } catch (exception: Exception) {
-                lastFailure = exception
-                onProgress("Baseus device host $baseUrl failed: ${exception.message ?: "unknown error"}")
             }
         }
         if (sawSuccessfulResponse) {
@@ -222,6 +312,7 @@ class VicohomeClient(
             setRequestProperty("Action", action)
             if (!token.isNullOrBlank()) {
                 setRequestProperty("Authorization", token)
+                setRequestProperty("auth", token)
             }
             setRequestProperty("Lang", "en")
             setRequestProperty("Content-Type", "application/x-www-form-urlencoded; charset=utf-8")
@@ -244,6 +335,28 @@ class VicohomeClient(
         } finally {
             connection.disconnect()
         }
+    }
+
+    private fun extractXmAccessToken(responseObject: JSONObject): String {
+        val directToken = responseObject.optString("access_token").orEmpty()
+        if (directToken.isNotBlank()) return directToken
+        val dataObject = responseObject.optJSONObject("data")
+        if (dataObject != null) {
+            val dataToken = dataObject.optString("access_token").orEmpty()
+            if (dataToken.isNotBlank()) return dataToken
+            val nestedToken = dataObject.optJSONObject("payload")?.optString("access_token").orEmpty()
+            if (nestedToken.isNotBlank()) return nestedToken
+            val payloadToken = dataObject.optString("token").orEmpty()
+            if (payloadToken.isNotBlank()) return payloadToken
+        }
+        val payloadObject = responseObject.optJSONObject("payload")
+        if (payloadObject != null) {
+            val payloadToken = payloadObject.optString("access_token").orEmpty()
+            if (payloadToken.isNotBlank()) return payloadToken
+            val payloadAltToken = payloadObject.optString("token").orEmpty()
+            if (payloadAltToken.isNotBlank()) return payloadAltToken
+        }
+        return responseObject.optString("token").orEmpty()
     }
 
     private fun buildXmFormBody(payload: JSONObject): String {
@@ -275,6 +388,11 @@ class VicohomeClient(
         }
         return builder.toString()
     }
+
+    private data class XmLoginVariant(
+        val userId: String,
+        val password: String,
+    )
 
     private fun updatePrivacyConsent(
         token: String,
