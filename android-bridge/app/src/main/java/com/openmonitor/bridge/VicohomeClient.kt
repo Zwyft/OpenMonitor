@@ -6,8 +6,9 @@ import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
 import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
+import java.util.Locale
 import java.util.UUID
-import android.os.Build
 
 class VicohomeClient(
     private val email: String,
@@ -80,13 +81,13 @@ class VicohomeClient(
                     baseUrl,
                     "/device/getWebrtcTicket",
                     payload,
+                    session.region,
                     session.token,
-                    bearerToken = true,
                 )
                 val responseObject = JSONObject(response)
-                val resultCode = responseObject.optInt("result", -1)
+                val resultCode = responseObject.optInt("code", responseObject.optInt("result", -1))
                 if (resultCode != 0) {
-                    val message = responseObject.optString("msg", "unknown error")
+                    val message = responseObject.optString("msg", responseObject.optString("message", "unknown error"))
                     throw IllegalStateException("Live ticket request failed (${session.region.label} @ $baseUrl): $message")
                 }
                 val data = responseObject.optJSONObject("data") ?: throw IllegalStateException("Live ticket response missing data")
@@ -106,67 +107,34 @@ class VicohomeClient(
     }
 
     private fun login(region: VicohomeRegion, onProgress: (String) -> Unit = {}): String {
-        val basePayload = JSONObject()
-            .put("email", email)
-            .put("password", password)
-            .put("loginType", 0)
-            .put("countryNo", region.countryNo)
-            .put("language", "en")
-
-        val appMetadata = JSONObject()
-            .put("versionName", "1.9.0")
-            .put("bundle", "com.baseus.security.ipc")
-            .put("timeZone", java.util.TimeZone.getDefault().id)
-            .put("appName", "baseus Security")
-            .put("tenantId", "baseus")
-            .put("env", "prod")
-            .put("version", 50)
-            .put("appType", "Android")
-
-        val deviceMetadata = JSONObject()
-            .put("appPackageName", "com.baseus.security.ipc")
-            .put("packageName", "com.baseus.security.ipc")
-            .put("brand", Build.MANUFACTURER)
-            .put("model", Build.MODEL)
-            .put("device", Build.DEVICE)
-            .put("board", Build.BOARD)
-            .put("hardware", Build.HARDWARE)
-            .put("osVersion", Build.VERSION.RELEASE ?: "")
-            .put("sdkInt", Build.VERSION.SDK_INT)
-            .put("display", Build.DISPLAY)
-            .put("product", Build.PRODUCT)
-
-        val payloadVariants = listOf(
-            basePayload,
-            JSONObject(basePayload.toString()).put("app", appMetadata),
-            JSONObject(basePayload.toString()).put("device", deviceMetadata),
-            JSONObject(basePayload.toString()).put("app", appMetadata).put("device", deviceMetadata),
-        )
+        val payload = JSONObject()
+            .put("type", 0)
+            .put("account", email)
+            .put("password", BaseusCrypto.encryptLoginPassword(password))
 
         var lastFailure: Exception? = null
         for (baseUrl in region.authBaseCandidates) {
-            for ((variantIndex, payload) in payloadVariants.withIndex()) {
-                try {
-                    onProgress("Trying Baseus auth host $baseUrl (variant ${variantIndex + 1}/${payloadVariants.size})")
-                    val response = postJson(baseUrl, "/account/login", payload)
-                    val responseObject = JSONObject(response)
-                    val resultCode = responseObject.optInt("result", -1)
-                    if (resultCode != 0) {
-                        val message = responseObject.optString("msg", "unknown error")
-                        throw IllegalStateException("Login failed (${region.label} @ $baseUrl, variant ${variantIndex + 1}): $message")
-                    }
-
-                    return responseObject
-                        .optJSONObject("data")
-                        ?.optJSONObject("token")
-                        ?.optString("token")
-                        .orEmpty()
-                        .also { token ->
-                            require(token.isNotBlank()) { "Login failed: token missing" }
-                        }
-                } catch (exception: Exception) {
-                    lastFailure = exception
+            try {
+                onProgress("Trying Baseus auth host $baseUrl")
+                val response = postJson(
+                    baseUrl = baseUrl,
+                    path = "/api/auth/account/login",
+                    payload = payload,
+                    region = region,
+                    queryParams = mapOf("countryCode" to region.loginCountryCode),
+                )
+                val responseObject = JSONObject(response)
+                val code = responseObject.optInt("code", responseObject.optInt("result", -1))
+                if (code != 0) {
+                    val message = responseObject.optString("msg", responseObject.optString("message", "unknown error"))
+                    throw IllegalStateException("Login failed (${region.label} @ $baseUrl): $message")
                 }
+                val data = responseObject.optJSONObject("data") ?: throw IllegalStateException("Login failed (${region.label} @ $baseUrl): data missing")
+                val auth = data.optString("auth").orEmpty()
+                require(auth.isNotBlank()) { "Login failed (${region.label} @ $baseUrl): auth token missing" }
+                return auth
+            } catch (exception: Exception) {
+                lastFailure = exception
             }
         }
         throw lastFailure ?: IllegalStateException("Login failed (${region.label})")
@@ -189,10 +157,11 @@ class VicohomeClient(
                     baseUrl,
                     "/device/listuserdevices",
                     payload,
+                    region,
                     token,
                 )
                 val responseObject = JSONObject(response)
-                if (responseObject.optInt("code", 0) != 0 && responseObject.optInt("result", 0) != 0) {
+                if (responseObject.optInt("code", responseObject.optInt("result", 0)) != 0) {
                     return emptyList()
                 }
 
@@ -248,10 +217,11 @@ class VicohomeClient(
                     baseUrl,
                     "/library/newselectlibrary",
                     payload,
+                    region,
                     token,
                 )
                 val responseObject = JSONObject(response)
-                if (responseObject.optInt("code", 0) != 0 && responseObject.optInt("result", 0) != 0) {
+                if (responseObject.optInt("code", responseObject.optInt("result", 0)) != 0) {
                     return emptyList()
                 }
 
@@ -290,10 +260,12 @@ class VicohomeClient(
         baseUrl: String,
         path: String,
         payload: JSONObject,
+        region: VicohomeRegion,
         token: String? = null,
-        bearerToken: Boolean = false,
+        queryParams: Map<String, String> = emptyMap(),
     ): String {
-        val connection = (URL(baseUrl.trimEnd('/') + path).openConnection() as HttpURLConnection).apply {
+        val requestBody = payload.toString()
+        val connection = (URL(buildRequestUrl(baseUrl, path, queryParams)).openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 5000
             readTimeout = 7000
@@ -301,14 +273,17 @@ class VicohomeClient(
             setRequestProperty("Content-Type", "application/json")
             setRequestProperty("Accept", "application/json")
             setRequestProperty("User-Agent", "OpenMonitorBridge/1.0")
-            if (!token.isNullOrBlank()) {
-                setRequestProperty("Authorization", if (bearerToken) "Bearer $token" else token)
+            setRequestHeaders(this, region, token, requestBody)
+            if (requestBody.isNotBlank()) {
+                val timestamp = System.currentTimeMillis().toString()
+                setRequestProperty("timestamp", timestamp)
+                setRequestProperty("sign", buildRequestSign(requestBody, timestamp))
             }
         }
 
         return try {
             connection.outputStream.use { output ->
-                output.write(payload.toString().toByteArray(StandardCharsets.UTF_8))
+                output.write(requestBody.toByteArray(StandardCharsets.UTF_8))
             }
             val responseStream = if (connection.responseCode in 200..299) {
                 connection.inputStream
@@ -319,6 +294,70 @@ class VicohomeClient(
         } finally {
             connection.disconnect()
         }
+    }
+
+    private fun buildRequestUrl(baseUrl: String, path: String, queryParams: Map<String, String>): String {
+        val builder = StringBuilder(baseUrl.trimEnd('/')).append(path)
+        if (queryParams.isNotEmpty()) {
+            builder.append('?')
+            queryParams.entries.forEachIndexed { index, entry ->
+                if (index > 0) {
+                    builder.append('&')
+                }
+                builder.append(entry.key)
+                builder.append('=')
+                builder.append(java.net.URLEncoder.encode(entry.value, StandardCharsets.UTF_8.name()))
+            }
+        }
+        return builder.toString()
+    }
+
+    private fun setRequestHeaders(
+        connection: HttpURLConnection,
+        region: VicohomeRegion,
+        token: String?,
+        requestBody: String,
+    ) {
+        connection.setRequestProperty("platform", "1")
+        connection.setRequestProperty("auth", token.orEmpty())
+        connection.setRequestProperty("osVersion", android.os.Build.VERSION.RELEASE.orEmpty())
+        connection.setRequestProperty("brand", sanitizeHeaderValue(android.os.Build.BRAND))
+        connection.setRequestProperty("model", sanitizeHeaderValue(android.os.Build.MODEL))
+        connection.setRequestProperty("appLang", "en")
+        connection.setRequestProperty("appVersion", BuildConfig.VERSION_NAME)
+        connection.setRequestProperty("versionCode", BuildConfig.VERSION_CODE.toString())
+        connection.setRequestProperty("channel", "")
+        connection.setRequestProperty("region", region.shortName)
+        connection.setRequestProperty("appType", "40")
+        if (requestBody.isNotBlank()) {
+            connection.setRequestProperty("Content-Length", requestBody.toByteArray(StandardCharsets.UTF_8).size.toString())
+        }
+    }
+
+    private fun buildRequestSign(requestBody: String, timestamp: String): String {
+        val md5 = MessageDigest.getInstance("MD5").digest(requestBody.toByteArray(StandardCharsets.UTF_8))
+        val md5Hex = md5.joinToString(separator = "") { byte ->
+            byte.toInt().and(0xff).toString(16).padStart(2, '0')
+        }.uppercase(Locale.US)
+        val sha1 = MessageDigest.getInstance("SHA1").digest("GSiPpcmX${md5Hex}${timestamp}".toByteArray(StandardCharsets.UTF_8))
+        return "ipc#CElYvAkK#" + sha1.joinToString(separator = "") { byte ->
+            byte.toInt().and(0xff).toString(16).padStart(2, '0')
+        }
+    }
+
+    private fun sanitizeHeaderValue(value: String?): String {
+        if (value.isNullOrBlank()) {
+            return ""
+        }
+        val builder = StringBuilder(value.length)
+        for (character in value) {
+            if (character.code <= 31 && character != '\t' || character.code >= 127) {
+                builder.append("unknow")
+            } else {
+                builder.append(character)
+            }
+        }
+        return builder.toString()
     }
 
     private fun parseLiveTicket(data: JSONObject): VicohomeLiveTicket {
