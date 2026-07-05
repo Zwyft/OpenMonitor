@@ -179,44 +179,59 @@ class VicohomeClient(
         val hostCandidates = (region.authBaseCandidates + region.apiBaseCandidates).distinct()
         val loginVariants = listOf(
             XmLoginVariant(
-                userId = email,
-                password = password,
+                action = "UserLoginXn",
+                payload = JSONObject()
+                    .put("account", email)
+                    .put("password", accountLogin.authToken)
+                    .put("app_id", BASEUS_XM_APP_KEY)
+                    .put("country_ode", region.shortName)
+                    .put("grant_type", "password")
+                    .put("scope", "base"),
             ),
             XmLoginVariant(
-                userId = email,
-                password = accountLogin.authToken,
+                action = "UserLoginXn",
+                payload = JSONObject()
+                    .put("account", accountLogin.accountInfo.accountId.toString())
+                    .put("password", accountLogin.authToken)
+                    .put("app_id", BASEUS_XM_APP_KEY)
+                    .put("country_ode", region.shortName)
+                    .put("grant_type", "password")
+                    .put("scope", "base"),
             ),
             XmLoginVariant(
-                userId = accountLogin.authToken,
-                password = password,
+                action = "UserLogin",
+                payload = JSONObject()
+                    .put("user_id", email)
+                    .put("password", accountLogin.authToken)
+                    .put("region", region.shortName)
+                    .put("type", "password"),
             ),
             XmLoginVariant(
-                userId = accountLogin.accountInfo.accountId.toString(),
-                password = password,
+                action = "UserLogin",
+                payload = JSONObject()
+                    .put("user_id", accountLogin.authToken)
+                    .put("password", password)
+                    .put("region", region.shortName)
+                    .put("type", "password"),
             ),
             XmLoginVariant(
-                userId = accountLogin.accountInfo.accountId.toString(),
-                password = accountLogin.pwd.ifBlank { password },
-            ),
-            XmLoginVariant(
-                userId = accountLogin.authToken,
-                password = accountLogin.pwd.ifBlank { password },
+                action = "UserLogin",
+                payload = JSONObject()
+                    .put("user_id", accountLogin.accountInfo.accountId.toString())
+                    .put("password", accountLogin.pwd.ifBlank { password })
+                    .put("region", region.shortName)
+                    .put("type", "password"),
             ),
         )
         var lastFailure: Exception? = null
         for (baseUrl in hostCandidates) {
             for ((variantIndex, variant) in loginVariants.withIndex()) {
                 try {
-                    onProgress("Trying Baseus XM session host $baseUrl (variant ${variantIndex + 1}/${loginVariants.size})")
-                    val payload = JSONObject()
-                        .put("user_id", variant.userId)
-                        .put("password", variant.password)
-                        .put("region", region.shortName)
-                        .put("type", "password")
+                    onProgress("Trying Baseus XM session host $baseUrl (${variant.action} variant ${variantIndex + 1}/${loginVariants.size})")
                     val response = postXmAction(
                         baseUrl = baseUrl,
-                        action = "UserLogin",
-                        payload = payload,
+                        action = variant.action,
+                        payload = variant.payload,
                         region = region,
                         token = null,
                     )
@@ -231,7 +246,7 @@ class VicohomeClient(
                         onProgress("Baseus XM session token acquired from $baseUrl")
                         return token
                     }
-                    throw IllegalStateException("XM session login returned no access token")
+                    throw IllegalStateException("XM session login returned no access token: ${response.take(240)}")
                 } catch (exception: Exception) {
                     lastFailure = exception
                 }
@@ -338,25 +353,38 @@ class VicohomeClient(
     }
 
     private fun extractXmAccessToken(responseObject: JSONObject): String {
-        val directToken = responseObject.optString("access_token").orEmpty()
+        val directToken = firstNonBlank(
+            responseObject.optString("access_token").orEmpty(),
+            responseObject.optString("accessToken").orEmpty(),
+            responseObject.optString("token").orEmpty(),
+        )
         if (directToken.isNotBlank()) return directToken
         val dataObject = responseObject.optJSONObject("data")
         if (dataObject != null) {
-            val dataToken = dataObject.optString("access_token").orEmpty()
+            val dataToken = firstNonBlank(
+                dataObject.optString("access_token").orEmpty(),
+                dataObject.optString("accessToken").orEmpty(),
+                dataObject.optString("token").orEmpty(),
+            )
             if (dataToken.isNotBlank()) return dataToken
-            val nestedToken = dataObject.optJSONObject("payload")?.optString("access_token").orEmpty()
+            val nestedToken = dataObject.optJSONObject("payload")?.let { extractXmAccessToken(it) }.orEmpty()
             if (nestedToken.isNotBlank()) return nestedToken
-            val payloadToken = dataObject.optString("token").orEmpty()
-            if (payloadToken.isNotBlank()) return payloadToken
         }
         val payloadObject = responseObject.optJSONObject("payload")
         if (payloadObject != null) {
-            val payloadToken = payloadObject.optString("access_token").orEmpty()
+            val payloadToken = firstNonBlank(
+                payloadObject.optString("access_token").orEmpty(),
+                payloadObject.optString("accessToken").orEmpty(),
+                payloadObject.optString("token").orEmpty(),
+            )
             if (payloadToken.isNotBlank()) return payloadToken
-            val payloadAltToken = payloadObject.optString("token").orEmpty()
+            val payloadAltToken = payloadObject.optJSONObject("data")?.let { extractXmAccessToken(it) }.orEmpty()
             if (payloadAltToken.isNotBlank()) return payloadAltToken
         }
-        return responseObject.optString("token").orEmpty()
+        return firstNonBlank(
+            responseObject.optString("token").orEmpty(),
+            responseObject.optString("accessToken").orEmpty(),
+        )
     }
 
     private fun buildXmFormBody(payload: JSONObject): String {
@@ -390,8 +418,8 @@ class VicohomeClient(
     }
 
     private data class XmLoginVariant(
-        val userId: String,
-        val password: String,
+        val action: String,
+        val payload: JSONObject,
     )
 
     private fun updatePrivacyConsent(
