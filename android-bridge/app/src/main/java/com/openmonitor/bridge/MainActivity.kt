@@ -1,22 +1,24 @@
 package com.openmonitor.bridge
 
 import android.Manifest
-import android.content.Intent
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.pm.PackageManager
-import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.text.Editable
+import android.text.TextWatcher
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.Spinner
 import android.widget.TextView
+import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 
 class MainActivity : AppCompatActivity() {
@@ -34,7 +36,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var hlsView: TextView
     private lateinit var bridgeIdView: TextView
     private lateinit var logView: TextView
-    private lateinit var exportLogsButton: Button
+    private lateinit var logFilterSpinner: Spinner
+    private lateinit var logSearchInput: EditText
+    private lateinit var copyFilteredLogsButton: Button
+    private lateinit var copyAllLogsButton: Button
     private lateinit var cameraContainer: LinearLayout
     private lateinit var usernameInput: EditText
     private lateinit var passwordInput: EditText
@@ -80,7 +85,10 @@ class MainActivity : AppCompatActivity() {
         hlsView = findViewById(R.id.hlsValue)
         bridgeIdView = findViewById(R.id.bridgeIdValue)
         logView = findViewById(R.id.logValue)
-        exportLogsButton = findViewById(R.id.exportLogsButton)
+        logFilterSpinner = findViewById(R.id.logFilterSpinner)
+        logSearchInput = findViewById(R.id.logSearchInput)
+        copyFilteredLogsButton = findViewById(R.id.copyFilteredLogsButton)
+        copyAllLogsButton = findViewById(R.id.copyAllLogsButton)
         cameraContainer = findViewById(R.id.cameraContainer)
         vicohomeContainer = findViewById(R.id.vicohomeContainer)
         usernameInput = findViewById(R.id.usernameInput)
@@ -104,7 +112,8 @@ class MainActivity : AppCompatActivity() {
         vicohomeButton.setOnClickListener { syncVicohome() }
         startButton.setOnClickListener { startBridge() }
         stopButton.setOnClickListener { stopBridge() }
-        exportLogsButton.setOnClickListener { openLogExport() }
+        copyFilteredLogsButton.setOnClickListener { copyLogs(filtered = true) }
+        copyAllLogsButton.setOnClickListener { copyLogs(filtered = false) }
 
         vicohomeRegionSpinner.adapter = ArrayAdapter(
             this,
@@ -113,6 +122,29 @@ class MainActivity : AppCompatActivity() {
         ).apply {
             setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         }
+        logFilterSpinner.adapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_spinner_item,
+            LogFilterPreset.entries.map { it.displayName },
+        ).apply {
+            setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        }
+
+        logFilterSpinner.setSelection(LogFilterPreset.ALL.ordinal)
+        logFilterSpinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: android.widget.AdapterView<*>, view: android.view.View?, position: Int, id: Long) {
+                renderLogs()
+            }
+
+            override fun onNothingSelected(parent: android.widget.AdapterView<*>) = Unit
+        }
+        logSearchInput.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
+            override fun afterTextChanged(s: Editable?) {
+                renderLogs()
+            }
+        })
 
         requestRequiredPermissions()
         renderState()
@@ -338,14 +370,23 @@ class MainActivity : AppCompatActivity() {
         val serverUrl = state.serverUrl.ifBlank { NetworkUtils.serverUrl(BridgeConfig.HTTP_PORT) }
         hlsView.text = if (state.playlistUrl.isBlank()) "—" else "$serverUrl${state.playlistUrl}"
         bridgeIdView.text = state.bridgeId.ifBlank { "—" }
-        logView.text = BridgeLogStore.snapshot(24)
-            .joinToString("\n") { it.formatLine() }
-            .ifBlank { "No logs yet." }
+        renderLogs()
         renderCameraCandidates()
         renderVicohomeEntries()
         renderProxyCapture()
         renderVpnCapture()
-        renderLogExport()
+    }
+
+    private fun renderLogs() {
+        val preset = LogFilterPreset.entries.getOrElse(logFilterSpinner.selectedItemPosition.coerceIn(0, LogFilterPreset.entries.lastIndex)) {
+            LogFilterPreset.ALL
+        }
+        val query = LogQuery(
+            preset = preset,
+            searchText = logSearchInput.text?.toString().orEmpty(),
+        )
+        val logs = BridgeLogStore.exportEntries().filter { query.matches(it) }.takeLast(250)
+        logView.text = logs.joinToString("\n") { it.formatLine() }.ifBlank { "No logs yet." }
     }
 
     private fun renderCameraCandidates() {
@@ -463,14 +504,24 @@ class MainActivity : AppCompatActivity() {
         vpnStopButton.isEnabled = state.running
     }
 
-    private fun renderLogExport() {
-        exportLogsButton.isEnabled = true
-    }
-
-    private fun openLogExport() {
-        val serverUrl = BridgeStateStore.snapshot().serverUrl.ifBlank { NetworkUtils.serverUrl(BridgeConfig.HTTP_PORT) }
-        val downloadUrl = "$serverUrl/api/logs.txt"
-        BridgeLogStore.info("Log export requested")
-        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(downloadUrl)))
+    private fun copyLogs(filtered: Boolean) {
+        val preset = LogFilterPreset.entries.getOrElse(logFilterSpinner.selectedItemPosition.coerceIn(0, LogFilterPreset.entries.lastIndex)) {
+            LogFilterPreset.ALL
+        }
+        val query = LogQuery(
+            preset = preset,
+            searchText = logSearchInput.text?.toString().orEmpty(),
+        )
+        val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+        val label = if (filtered) "OpenMonitor filtered logs" else "OpenMonitor full logs"
+        val text = if (filtered) {
+            BridgeLogStore.exportText(query)
+        } else {
+            BridgeLogStore.exportText()
+        }
+        clipboard.setPrimaryClip(ClipData.newPlainText(label, text))
+        val summary = if (filtered) "${preset.displayName}${query.searchText.takeIf { it.isNotBlank() }?.let { " • $it" } ?: ""}" else "full log"
+        Toast.makeText(this, "Copied $summary", Toast.LENGTH_SHORT).show()
+        BridgeLogStore.info("Log copy requested ($summary)")
     }
 }

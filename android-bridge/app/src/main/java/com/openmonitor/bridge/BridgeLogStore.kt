@@ -48,6 +48,24 @@ object BridgeLogStore {
         return synchronized(lock) { entries.takeLast(limit) }
     }
 
+    fun exportEntries(): List<BridgeLogEntry> {
+        return synchronized(lock) {
+            val file = logFile
+            if (file == null || !file.exists()) {
+                entries
+            } else {
+                file.readLines()
+                    .mapNotNull { parseLine(it) }
+            }
+        }
+    }
+
+    fun exportText(filter: LogQuery? = null): String {
+        val source = exportEntries()
+        val filtered = filter?.let { query -> filterEntries(source, query) } ?: source
+        return filtered.joinToString("\n") { it.formatLine() }.ifBlank { "No logs yet." }
+    }
+
     private fun append(level: String, message: String) {
         val entry = BridgeLogEntry(
             timestampMillis = System.currentTimeMillis(),
@@ -77,5 +95,9 @@ object BridgeLogStore {
         val level = parts[1]
         val message = parts[2].replace("\\n", "\n")
         return BridgeLogEntry(timestamp, level, message)
+    }
+
+    private fun filterEntries(entries: List<BridgeLogEntry>, query: LogQuery): List<BridgeLogEntry> {
+        return entries.filter { entry -> query.matches(entry) }
     }
 }

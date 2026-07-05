@@ -340,6 +340,38 @@
             android:textStyle="bold" />
 
         <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Log filter"
+            android:textColor="#94A3B8" />
+
+        <Spinner
+            android:id="@+id/logFilterSpinner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:backgroundTint="#38BDF8" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Search"
+            android:textColor="#94A3B8" />
+
+        <EditText
+            android:id="@+id/logSearchInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:hint="filter text, e.g. tls, baseus, dns"
+            android:inputType="text"
+            android:textColor="#E2E8F0"
+            android:textColorHint="#64748B"
+            android:backgroundTint="#38BDF8" />
+
+        <TextView
             android:id="@+id/logValue"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -347,11 +379,26 @@
             android:textColor="#CBD5E1"
             android:textSize="12sp" />
 
-        <Button
-            android:id="@+id/exportLogsButton"
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
-            android:text="Download log file" />
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/copyFilteredLogsButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Copy filtered logs" />
+
+            <Button
+                android:id="@+id/copyAllLogsButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="12dp"
+                android:layout_weight="1"
+                android:text="Copy full logs" />
+        </LinearLayout>
     </LinearLayout>
 </ScrollView>
