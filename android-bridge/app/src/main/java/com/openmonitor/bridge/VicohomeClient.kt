@@ -1,6 +1,7 @@
 package com.openmonitor.bridge
 
 import org.json.JSONObject
+import org.json.JSONArray
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
@@ -10,9 +11,11 @@ import java.security.MessageDigest
 import java.util.Locale
 import java.util.UUID
 
-private const val BASEUS_APP_VERSION_NAME = "1.0"
-private const val BASEUS_APP_VERSION_CODE = "1"
-
+private const val BASEUS_APP_VERSION_NAME = "1.2.4.0"
+private const val BASEUS_APP_VERSION_CODE = "32"
+private const val BASEUS_XM_APP_KEY = "YGnzWsirKf55MxrjG5"
+private const val BASEUS_XM_APP_SECRET = "Teyi6OmXJZxVDiZY4k"
+private const val BASEUS_XM_SERVICE_VERSION = "1.0"
 class VicohomeClient(
     private val email: String,
     private val password: String,
@@ -72,13 +75,13 @@ class VicohomeClient(
             .put(
                 "app",
                 JSONObject()
-                    .put("versionName", "3.50.0(2f68e2)")
+                    .put("versionName", BASEUS_APP_VERSION_NAME)
                     .put("bundle", "addx.ai.vicoo")
                     .put("timeZone", java.util.TimeZone.getDefault().id)
                     .put("appName", "VicoHome")
                     .put("tenantId", "vicoo")
                     .put("env", "prod-k8s")
-                    .put("version", 14148)
+                    .put("version", BASEUS_APP_VERSION_CODE.toInt())
                     .put("appType", "iOS"),
             )
 
@@ -154,55 +157,93 @@ class VicohomeClient(
         region: VicohomeRegion,
         onProgress: (String) -> Unit = {},
     ): List<VicohomeDevice> {
-        val payload = JSONObject()
-            .put("language", "en")
-            .put("countryNo", region.countryNo)
-
         var lastFailure: Exception? = null
+        var sawSuccessfulResponse = false
+        var lastEmptyShape: String? = null
         for (baseUrl in region.apiBaseCandidates) {
             try {
                 onProgress("Trying Baseus device host $baseUrl")
-                val response = postJson(
-                    baseUrl,
-                    "/device/listuserdevices",
-                    payload,
-                    region,
-                    token,
+                val response = postXmAction(
+                    baseUrl = baseUrl,
+                    action = "GetUserDeviceList",
+                    payload = JSONObject(),
+                    region = region,
+                    token = token,
                 )
                 val responseObject = JSONObject(response)
-                if (responseObject.optInt("code", responseObject.optInt("result", 0)) != 0) {
-                    return emptyList()
+                val resultCode = responseObject.optInt("code", responseObject.optInt("result", 0))
+                if (resultCode != 0) {
+                    val message = responseObject.optString("msg", responseObject.optString("message", "unknown error"))
+                    throw IllegalStateException("Device list request failed (${region.label} @ $baseUrl): $message")
                 }
 
-                val list = responseObject
-                    .optJSONObject("data")
-                    ?.optJSONArray("list")
-                    ?: return emptyList()
-
-                val devices = mutableListOf<VicohomeDevice>()
-                for (index in 0 until list.length()) {
-                    val device = list.optJSONObject(index) ?: continue
-                    devices += VicohomeDevice(
-                        serialNumber = device.optString("serialNumber"),
-                        modelNo = device.optString("modelNo"),
-                        deviceName = device.optString("deviceName"),
-                        networkName = device.optString("networkName"),
-                        ip = device.optString("ip"),
-                        batteryLevel = device.optInt("batteryLevel"),
-                        locationName = device.optString("locationName"),
-                        signalStrength = device.optInt("signalStrength"),
-                        wifiChannel = device.optInt("wifiChannel"),
-                        isCharging = device.optInt("isCharging"),
-                        chargingMode = device.optInt("chargingMode"),
-                        macAddress = device.optString("macAddress"),
-                    )
+                sawSuccessfulResponse = true
+                val devices = parseDeviceList(responseObject)
+                if (devices.isNotEmpty()) {
+                    onProgress("Baseus device host $baseUrl returned ${devices.size} device(s)")
+                    return devices
                 }
-                return devices
+                lastEmptyShape = describeDeviceListShape(responseObject)
+                onProgress("Baseus device host $baseUrl returned no devices: $lastEmptyShape")
             } catch (exception: Exception) {
                 lastFailure = exception
+                onProgress("Baseus device host $baseUrl failed: ${exception.message ?: "unknown error"}")
             }
         }
+        if (sawSuccessfulResponse) {
+            if (!lastEmptyShape.isNullOrBlank()) {
+                onProgress("Baseus cloud returned an empty device list: $lastEmptyShape")
+            }
+            return emptyList()
+        }
         throw lastFailure ?: IllegalStateException("Device list request failed (${region.label})")
+    }
+
+    private fun postXmAction(
+        baseUrl: String,
+        action: String,
+        payload: JSONObject,
+        region: VicohomeRegion,
+        token: String? = null,
+    ): String {
+        val requestBody = payload.toString()
+        val timestamp = System.currentTimeMillis()
+        val connection = (URL(buildRequestUrl(baseUrl, "", emptyMap())).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 5000
+            readTimeout = 7000
+            doOutput = true
+            setRequestProperty("User-Agent", buildXmUserAgent())
+            setRequestProperty("Timestamp", timestamp.toString())
+            setRequestProperty("Version", BASEUS_XM_SERVICE_VERSION)
+            setRequestProperty("SecretId", BASEUS_XM_APP_KEY)
+            setRequestProperty("Signature", buildXmSignature(timestamp))
+            setRequestProperty("RequestId", UUID.randomUUID().toString())
+            setRequestProperty("Action", action)
+            if (!token.isNullOrBlank()) {
+                setRequestProperty("Authorization", token)
+            }
+            setRequestProperty("Lang", "en")
+            setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            setRequestProperty("Accept", "application/json")
+            if (requestBody.isNotBlank()) {
+                setRequestProperty("Content-Length", requestBody.toByteArray(StandardCharsets.UTF_8).size.toString())
+            }
+        }
+
+        return try {
+            connection.outputStream.use { output ->
+                output.write(requestBody.toByteArray(StandardCharsets.UTF_8))
+            }
+            val responseStream = if (connection.responseCode in 200..299) {
+                connection.inputStream
+            } else {
+                connection.errorStream
+            } ?: throw IllegalStateException("Vicohome request failed with HTTP ${connection.responseCode}")
+            readAll(responseStream)
+        } finally {
+            connection.disconnect()
+        }
     }
 
     private fun updatePrivacyConsent(
@@ -446,6 +487,19 @@ class VicohomeClient(
         }
     }
 
+    private fun buildXmUserAgent(): String {
+        return "Android/$BASEUS_APP_VERSION_NAME/${sanitizeHeaderValue(android.os.Build.BRAND)}/${sanitizeHeaderValue(android.os.Build.MODEL)}/${android.os.Build.VERSION.RELEASE.orEmpty()}"
+    }
+
+    private fun buildXmSignature(timestamp: Long): String {
+        val digest = MessageDigest.getInstance("MD5").digest(
+            "$timestamp$BASEUS_XM_APP_KEY$BASEUS_XM_APP_SECRET".toByteArray(StandardCharsets.UTF_8)
+        )
+        return digest.joinToString(separator = "") { byte ->
+            byte.toInt().and(0xff).toString(16).padStart(2, '0')
+        }
+    }
+
     private fun sanitizeHeaderValue(value: String?): String {
         if (value.isNullOrBlank()) {
             return ""
@@ -506,6 +560,178 @@ class VicohomeClient(
                 }
             }
         }
+    }
+
+    private fun parseDeviceList(responseObject: JSONObject): List<VicohomeDevice> {
+        val containers = listOfNotNull(
+            responseObject.optJSONObject("data"),
+            responseObject.optJSONObject("payload"),
+            responseObject.optJSONObject("result"),
+            responseObject,
+        )
+        for (container in containers) {
+            val entries = firstArray(container, "device_list", "deviceList", "devices", "list")
+                ?: continue
+            val devices = mutableListOf<VicohomeDevice>()
+            for (index in 0 until entries.length()) {
+                val device = entries.optJSONObject(index) ?: continue
+                val deviceInfo = device.optJSONObject("device_info")
+                val family = device.optJSONObject("family")
+                val serialNumber = firstNonBlank(
+                    device.optString("device_sn"),
+                    device.optString("serialNumber"),
+                    device.optString("sn"),
+                )
+                if (serialNumber.isBlank()) continue
+                val deviceName = firstNonBlank(
+                    device.optString("device_name"),
+                    device.optString("main_cam_name"),
+                    device.optString("deviceName"),
+                    deviceInfo?.optString("camera_name"),
+                    deviceInfo?.optString("cusUIDeviceName"),
+                    serialNumber,
+                )
+                val modelNo = firstNonBlank(
+                    device.optString("device_model"),
+                    device.optString("modelNo"),
+                    deviceInfo?.optString("camera_model"),
+                    deviceInfo?.optString("cusUIDeviceModel"),
+                )
+                val networkName = firstNonBlank(
+                    deviceInfo?.optString("cur_ssid"),
+                    device.optString("networkName"),
+                    family?.optString("family_name"),
+                )
+                val ipAddress = firstIpv4Address(
+                    deviceInfo?.optString("ip_addr"),
+                    device.optString("ip"),
+                    device.optString("ip_addr"),
+                )
+                val batteryLevel = firstInt(
+                    deviceInfo?.opt("battery"),
+                    device.opt("batteryLevel"),
+                )
+                val locationName = firstNonBlank(
+                    family?.optString("family_name"),
+                    device.optString("locationName"),
+                )
+                val signalStrength = firstInt(
+                    deviceInfo?.opt("wifi_signal"),
+                    device.opt("signalStrength"),
+                )
+                val wifiChannel = firstInt(
+                    deviceInfo?.opt("WiFiChannel"),
+                    device.opt("wifiChannel"),
+                )
+                val isCharging = firstInt(
+                    deviceInfo?.opt("charge_state"),
+                    device.opt("isCharging"),
+                )
+                val chargingMode = firstInt(
+                    deviceInfo?.opt("network_type"),
+                    device.opt("chargingMode"),
+                )
+                val macAddress = firstNonBlank(
+                    deviceInfo?.optString("mac_addr"),
+                    deviceInfo?.optString("mac"),
+                    device.optString("macAddress"),
+                )
+                devices += VicohomeDevice(
+                    serialNumber = serialNumber,
+                    modelNo = modelNo,
+                    deviceName = deviceName,
+                    networkName = networkName,
+                    ip = ipAddress,
+                    batteryLevel = batteryLevel,
+                    locationName = locationName,
+                    signalStrength = signalStrength,
+                    wifiChannel = wifiChannel,
+                    isCharging = isCharging,
+                    chargingMode = chargingMode,
+                    macAddress = macAddress,
+                )
+            }
+            if (devices.isNotEmpty()) {
+                return devices.distinctBy { it.serialNumber }
+            }
+        }
+        return emptyList()
+    }
+
+    private fun describeDeviceListShape(responseObject: JSONObject): String {
+        val container = responseObject.optJSONObject("data")
+            ?: responseObject.optJSONObject("payload")
+            ?: responseObject.optJSONObject("result")
+            ?: responseObject
+        val keys = mutableListOf<String>()
+        val iterator = container.keys()
+        while (iterator.hasNext()) {
+            keys += iterator.next()
+        }
+        val deviceCount = firstArray(container, "device_list", "deviceList", "devices", "list")?.length() ?: 0
+        val total = when {
+            container.has("total") -> container.optInt("total", -1)
+            responseObject.has("total") -> responseObject.optInt("total", -1)
+            else -> -1
+        }
+        return buildString {
+            append("keys=")
+            append(keys.joinToString(separator = ",").ifBlank { "none" })
+            append(", total=")
+            append(total)
+            append(", deviceCount=")
+            append(deviceCount)
+        }
+    }
+
+    private fun firstArray(container: JSONObject, vararg names: String): JSONArray? {
+        for (name in names) {
+            val array = container.optJSONArray(name)
+            if (array != null) {
+                return array
+            }
+        }
+        return null
+    }
+
+    private fun firstNonBlank(vararg values: String?): String {
+        for (value in values) {
+            val trimmed = value?.trim().orEmpty()
+            if (trimmed.isNotBlank()) {
+                return trimmed
+            }
+        }
+        return ""
+    }
+
+    private fun firstIpv4Address(vararg values: String?): String {
+        for (value in values) {
+            val trimmed = value?.trim().orEmpty()
+            if (isIpv4Address(trimmed)) {
+                return trimmed
+            }
+        }
+        return ""
+    }
+
+    private fun firstInt(vararg values: Any?): Int {
+        for (value in values) {
+            when (value) {
+                is Number -> return value.toInt()
+                is String -> value.toIntOrNull()?.let { return it }
+            }
+        }
+        return 0
+    }
+
+    private fun isIpv4Address(value: String): Boolean {
+        val parts = value.split('.')
+        if (parts.size != 4) return false
+        for (part in parts) {
+            val number = part.toIntOrNull() ?: return false
+            if (number !in 0..255) return false
+        }
+        return true
     }
 
     private fun normalizeTimestamp(value: Any?): String {
