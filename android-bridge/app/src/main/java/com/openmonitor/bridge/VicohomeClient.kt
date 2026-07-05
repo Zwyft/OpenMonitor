@@ -7,6 +7,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.nio.charset.StandardCharsets
 import java.util.UUID
+import android.os.Build
 
 class VicohomeClient(
     private val email: String,
@@ -105,35 +106,67 @@ class VicohomeClient(
     }
 
     private fun login(region: VicohomeRegion, onProgress: (String) -> Unit = {}): String {
-        val payload = JSONObject()
+        val basePayload = JSONObject()
             .put("email", email)
             .put("password", password)
             .put("loginType", 0)
             .put("countryNo", region.countryNo)
             .put("language", "en")
 
+        val appMetadata = JSONObject()
+            .put("versionName", "1.9.0")
+            .put("bundle", "com.baseus.security.ipc")
+            .put("timeZone", java.util.TimeZone.getDefault().id)
+            .put("appName", "baseus Security")
+            .put("tenantId", "baseus")
+            .put("env", "prod")
+            .put("version", 50)
+            .put("appType", "Android")
+
+        val deviceMetadata = JSONObject()
+            .put("appPackageName", "com.baseus.security.ipc")
+            .put("packageName", "com.baseus.security.ipc")
+            .put("brand", Build.MANUFACTURER)
+            .put("model", Build.MODEL)
+            .put("device", Build.DEVICE)
+            .put("board", Build.BOARD)
+            .put("hardware", Build.HARDWARE)
+            .put("osVersion", Build.VERSION.RELEASE ?: "")
+            .put("sdkInt", Build.VERSION.SDK_INT)
+            .put("display", Build.DISPLAY)
+            .put("product", Build.PRODUCT)
+
+        val payloadVariants = listOf(
+            basePayload,
+            JSONObject(basePayload.toString()).put("app", appMetadata),
+            JSONObject(basePayload.toString()).put("device", deviceMetadata),
+            JSONObject(basePayload.toString()).put("app", appMetadata).put("device", deviceMetadata),
+        )
+
         var lastFailure: Exception? = null
         for (baseUrl in region.authBaseCandidates) {
-            try {
-                onProgress("Trying Baseus auth host $baseUrl")
-                val response = postJson(baseUrl, "/account/login", payload)
-                val responseObject = JSONObject(response)
-                val resultCode = responseObject.optInt("result", -1)
-                if (resultCode != 0) {
-                    val message = responseObject.optString("msg", "unknown error")
-                    throw IllegalStateException("Login failed (${region.label} @ $baseUrl): $message")
-                }
-
-                return responseObject
-                    .optJSONObject("data")
-                    ?.optJSONObject("token")
-                    ?.optString("token")
-                    .orEmpty()
-                    .also { token ->
-                        require(token.isNotBlank()) { "Login failed: token missing" }
+            for ((variantIndex, payload) in payloadVariants.withIndex()) {
+                try {
+                    onProgress("Trying Baseus auth host $baseUrl (variant ${variantIndex + 1}/${payloadVariants.size})")
+                    val response = postJson(baseUrl, "/account/login", payload)
+                    val responseObject = JSONObject(response)
+                    val resultCode = responseObject.optInt("result", -1)
+                    if (resultCode != 0) {
+                        val message = responseObject.optString("msg", "unknown error")
+                        throw IllegalStateException("Login failed (${region.label} @ $baseUrl, variant ${variantIndex + 1}): $message")
                     }
-            } catch (exception: Exception) {
-                lastFailure = exception
+
+                    return responseObject
+                        .optJSONObject("data")
+                        ?.optJSONObject("token")
+                        ?.optString("token")
+                        .orEmpty()
+                        .also { token ->
+                            require(token.isNotBlank()) { "Login failed: token missing" }
+                        }
+                } catch (exception: Exception) {
+                    lastFailure = exception
+                }
             }
         }
         throw lastFailure ?: IllegalStateException("Login failed (${region.label})")
