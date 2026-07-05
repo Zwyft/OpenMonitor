@@ -3,6 +3,7 @@ package com.openmonitor.bridge
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -33,6 +34,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var hlsView: TextView
     private lateinit var bridgeIdView: TextView
     private lateinit var logView: TextView
+    private lateinit var exportLogsButton: Button
     private lateinit var cameraContainer: LinearLayout
     private lateinit var usernameInput: EditText
     private lateinit var passwordInput: EditText
@@ -78,6 +80,7 @@ class MainActivity : AppCompatActivity() {
         hlsView = findViewById(R.id.hlsValue)
         bridgeIdView = findViewById(R.id.bridgeIdValue)
         logView = findViewById(R.id.logValue)
+        exportLogsButton = findViewById(R.id.exportLogsButton)
         cameraContainer = findViewById(R.id.cameraContainer)
         vicohomeContainer = findViewById(R.id.vicohomeContainer)
         usernameInput = findViewById(R.id.usernameInput)
@@ -101,6 +104,7 @@ class MainActivity : AppCompatActivity() {
         vicohomeButton.setOnClickListener { syncVicohome() }
         startButton.setOnClickListener { startBridge() }
         stopButton.setOnClickListener { stopBridge() }
+        exportLogsButton.setOnClickListener { openLogExport() }
 
         vicohomeRegionSpinner.adapter = ArrayAdapter(
             this,
@@ -341,6 +345,7 @@ class MainActivity : AppCompatActivity() {
         renderVicohomeEntries()
         renderProxyCapture()
         renderVpnCapture()
+        renderLogExport()
     }
 
     private fun renderCameraCandidates() {
@@ -456,5 +461,16 @@ class MainActivity : AppCompatActivity() {
         }
         vpnStartButton.isEnabled = !state.running
         vpnStopButton.isEnabled = state.running
+    }
+
+    private fun renderLogExport() {
+        exportLogsButton.isEnabled = true
+    }
+
+    private fun openLogExport() {
+        val serverUrl = BridgeStateStore.snapshot().serverUrl.ifBlank { NetworkUtils.serverUrl(BridgeConfig.HTTP_PORT) }
+        val downloadUrl = "$serverUrl/api/logs.txt"
+        BridgeLogStore.info("Log export requested")
+        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(downloadUrl)))
     }
 }

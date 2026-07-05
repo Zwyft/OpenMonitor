@@ -27,6 +27,7 @@ This is a phone-hosted RTSP-to-HLS bridge app.
 - For app traffic capture, start proxy capture, then set the phone's Wi‑Fi proxy to `127.0.0.1:18481` before opening the Baseus app.
 - The proxy logs hostnames and request targets; HTTPS bodies still depend on whether the app honors a local proxy and trusts a user CA.
 - If the app ignores the proxy, start VPN capture instead. It logs DNS and TCP/UDP destinations for the Baseus app package `com.baseus.security.ipc`.
+- Tap `Download log file` in the phone app, or open `http://<phone-ip>:18480/api/logs.txt` in a browser, to save the current capture log.
 - If local probing fails, enter your Vicohome account email/password, pick a region, and tap `Vicohome sync` to load cloud devices and recent clips.
 - Leave the region picker on `Auto (US then EU)` if you are not sure which backend your Baseus account uses.
 - Recent clips are HLS URLs from Vicohome’s cloud API; tap one to start playback on the phone or open the URL from the iPad browser.
@@ -48,6 +49,7 @@ This is a phone-hosted RTSP-to-HLS bridge app.
 - If Baseus capture mode still finds nothing, the camera may be exposing only a hub/cloud relay path or a vendor-locked stream that needs traffic capture from the phone app itself.
 - If the Baseus app ignores the proxy or pins TLS, we will need a VPN capture path next.
 - If VPN capture shows only local IPs or nothing useful, the app may be using certificate pinning, QUIC, or another backend path that needs deeper inspection.
+- If you need the logs after a crash, download `openmonitor-bridge.log` from the phone-hosted server before restarting the app.
 - If Vicohome sync fails with `account not registered`, switch the region picker from `Auto` to `US` or `EU` and retry.
 - If Vicohome sync succeeds but clips still fail to play, the cloud URL may be expiring too quickly or the account may require a different region/API host.
 

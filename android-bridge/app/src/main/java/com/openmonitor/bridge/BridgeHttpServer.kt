@@ -63,6 +63,7 @@ class BridgeHttpServer(
                 method == "GET" && path == "/" -> respondText(output, 200, "text/html; charset=utf-8", rootPage())
                 method == "GET" && path == "/api/state" -> respondText(output, 200, "application/json; charset=utf-8", BridgeStateStore.snapshot().toJson())
                 method == "GET" && path == "/api/logs" -> respondText(output, 200, "application/json; charset=utf-8", logsJson())
+                method == "GET" && path == "/api/logs.txt" -> respondDownload(output, "text/plain; charset=utf-8", "openmonitor-bridge.log", logsText(1000))
                 method == "GET" && path == "/api/vpn/state" -> respondText(output, 200, "application/json; charset=utf-8", vpnStateJson())
                 method == "GET" && path == "/api/cameras" -> respondText(output, 200, "application/json; charset=utf-8", camerasJson())
                 method == "GET" && path == "/api/vicohome/devices" -> respondText(output, 200, "application/json; charset=utf-8", vicohomeDevicesJson())
@@ -119,6 +120,7 @@ class BridgeHttpServer(
                 </div>
                 <h2>Logs</h2>
                 <pre style="white-space: pre-wrap; word-break: break-word; background:#0b1220; border-radius:12px; padding:12px; max-height:320px; overflow:auto;">${escapeHtml(logsText(40))}</pre>
+                <p><a href="${escapeHtml("$serverUrl/api/logs.txt")}">Download full log file</a></p>
                 <p class="muted">Use the Android app to start or stop the bridge. Open the HLS URL from another device on the same Wi‑Fi.</p>
               </div>
             </body>
@@ -144,6 +146,27 @@ class BridgeHttpServer(
 
     private fun respondText(output: BufferedOutputStream, status: Int, contentType: String, body: String) {
         respondBytes(output, status, contentType, body.toByteArray(StandardCharsets.UTF_8))
+    }
+
+    private fun respondDownload(output: BufferedOutputStream, contentType: String, filename: String, body: String) {
+        val bytes = body.toByteArray(StandardCharsets.UTF_8)
+        val header = buildString {
+            append("HTTP/1.1 200 OK\r\n")
+            append("Content-Type: ")
+            append(contentType)
+            append("\r\n")
+            append("Content-Disposition: attachment; filename=\"")
+            append(filename)
+            append("\"\r\n")
+            append("Content-Length: ")
+            append(bytes.size)
+            append("\r\n")
+            append("Connection: close\r\n")
+            append("\r\n")
+        }
+        output.write(header.toByteArray(StandardCharsets.UTF_8))
+        output.write(bytes)
+        output.flush()
     }
 
     private fun respondBytes(output: BufferedOutputStream, status: Int, contentType: String, body: ByteArray) {
