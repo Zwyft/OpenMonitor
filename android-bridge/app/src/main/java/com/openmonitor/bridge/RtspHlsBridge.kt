@@ -9,6 +9,7 @@ import java.io.File
 import java.security.MessageDigest
 import java.util.Locale
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 
 data class BridgeLaunch(
@@ -27,6 +28,13 @@ class RtspHlsBridge(
     @Volatile
     private var mediaPlayer: MediaPlayer? = null
 
+    private data class BridgeProfile(
+        val name: String,
+        val options: List<String>,
+        val sout: String,
+        val hardwareDecode: Boolean,
+    )
+
     fun start(rtspUrl: String, notifyState: (BridgeState) -> Unit): BridgeLaunch {
         stop()
 
@@ -39,11 +47,48 @@ class RtspHlsBridge(
 
         val playlistFile = File(bridgeDir, "index.m3u8")
         val segmentPattern = File(bridgeDir, "segment-########.ts").absolutePath
-        val localIndexUrl = "segment-########.ts"
-        val sout = buildSout(playlistFile.absolutePath, segmentPattern, localIndexUrl)
+        val segmentBaseUrl = "${NetworkUtils.serverUrl(BridgeConfig.HTTP_PORT)}/hls/$bridgeId/segment-########.ts"
+        val profiles = listOf(
+            BridgeProfile(
+                name = "remux",
+                options = listOf("--network-caching=2000", "--rtsp-tcp", "--sout-keep"),
+                sout = buildSout(
+                    playlistPath = playlistFile.absolutePath,
+                    segmentPath = segmentPattern,
+                    indexUrl = segmentBaseUrl,
+                    videoTranscode = null,
+                    audioTranscode = null,
+                ),
+                hardwareDecode = true,
+            ),
+            BridgeProfile(
+                name = "video-only-transcode",
+                options = listOf("--network-caching=2000", "--rtsp-tcp", "--sout-keep"),
+                sout = buildSout(
+                    playlistPath = playlistFile.absolutePath,
+                    segmentPath = segmentPattern,
+                    indexUrl = segmentBaseUrl,
+                    videoTranscode = "vcodec=h264,vb=900",
+                    audioTranscode = null,
+                ),
+                hardwareDecode = false,
+            ),
+            BridgeProfile(
+                name = "video-audio-transcode",
+                options = listOf("--network-caching=2000", "--rtsp-tcp", "--sout-keep"),
+                sout = buildSout(
+                    playlistPath = playlistFile.absolutePath,
+                    segmentPath = segmentPattern,
+                    indexUrl = segmentBaseUrl,
+                    videoTranscode = "vcodec=h264,vb=900",
+                    audioTranscode = "acodec=mp4a,ab=128,channels=2,samplerate=44100",
+                ),
+                hardwareDecode = false,
+            ),
+        )
         BridgeLogStore.info("Bridge $bridgeId output dir: ${bridgeDir.absolutePath}")
         BridgeLogStore.info("Bridge $bridgeId playlist: ${playlistFile.absolutePath}")
-        BridgeLogStore.info("Bridge $bridgeId sout: $sout")
+        BridgeLogStore.info("Bridge $bridgeId segment URL: $segmentBaseUrl")
 
         notifyState(
             BridgeState(
@@ -56,104 +101,118 @@ class RtspHlsBridge(
         )
 
         thread(name = "RtspHlsBridge-$bridgeId", isDaemon = true) {
-            try {
-                val options = arrayListOf(
-                    "--quiet",
-                    "--no-video-title-show",
-                    "--no-audio-time-stretch",
-                    "--rtsp-tcp",
-                    "--network-caching=1000",
-                    "--sout-keep",
+            for (profile in profiles) {
+                val errorSeen = AtomicBoolean(false)
+                val errorMessage = arrayOfNulls<String>(1)
+                BridgeLogStore.info("Bridge $bridgeId trying profile ${profile.name}")
+                notifyState(
+                    BridgeState(
+                        bridgeId = bridgeId,
+                        rtspUrl = rtspUrl,
+                        playlistUrl = "/hls/$bridgeId/index.m3u8",
+                        status = "starting",
+                        message = "Trying ${profile.name}",
+                    ),
                 )
-                BridgeLogStore.info("Bridge $bridgeId VLC options: ${options.joinToString(" ")}")
-                val vlc = LibVLC(context, options)
-                val player = MediaPlayer(vlc)
-                libVlc = vlc
-                mediaPlayer = player
-                player.setEventListener(object : MediaPlayer.EventListener {
-                    override fun onEvent(event: MediaPlayer.Event) {
-                        val name = when (event.type) {
-                            MediaPlayer.Event.Opening -> "Opening"
-                            MediaPlayer.Event.Buffering -> "Buffering"
-                            MediaPlayer.Event.Playing -> "Playing"
-                            MediaPlayer.Event.Paused -> "Paused"
-                            MediaPlayer.Event.Stopped -> "Stopped"
-                            MediaPlayer.Event.EndReached -> "EndReached"
-                            MediaPlayer.Event.EncounteredError -> "EncounteredError"
-                            MediaPlayer.Event.TimeChanged -> "TimeChanged"
-                            MediaPlayer.Event.PositionChanged -> "PositionChanged"
-                            MediaPlayer.Event.Vout -> "Vout"
-                            else -> "Event(${event.type})"
+                stop()
+                var profileSucceeded = false
+                try {
+                    val options = arrayListOf(
+                        "--quiet",
+                        "--no-video-title-show",
+                        "--no-audio-time-stretch",
+                    )
+                    options.addAll(profile.options)
+                    BridgeLogStore.info("Bridge $bridgeId VLC options (${profile.name}): ${options.joinToString(" ")}")
+                    val vlc = LibVLC(context, options)
+                    val player = MediaPlayer(vlc)
+                    libVlc = vlc
+                    mediaPlayer = player
+                    player.setEventListener(object : MediaPlayer.EventListener {
+                        override fun onEvent(event: MediaPlayer.Event) {
+                            val name = when (event.type) {
+                                MediaPlayer.Event.Opening -> "Opening"
+                                MediaPlayer.Event.Buffering -> "Buffering"
+                                MediaPlayer.Event.Playing -> "Playing"
+                                MediaPlayer.Event.Paused -> "Paused"
+                                MediaPlayer.Event.Stopped -> "Stopped"
+                                MediaPlayer.Event.EndReached -> "EndReached"
+                                MediaPlayer.Event.EncounteredError -> "EncounteredError"
+                                MediaPlayer.Event.TimeChanged -> "TimeChanged"
+                                MediaPlayer.Event.PositionChanged -> "PositionChanged"
+                                MediaPlayer.Event.Vout -> "Vout"
+                                else -> "Event(${event.type})"
+                            }
+                            BridgeLogStore.info("Bridge $bridgeId VLC event (${profile.name}): $name")
+                            if (event.type == MediaPlayer.Event.EncounteredError) {
+                                errorSeen.set(true)
+                                errorMessage[0] = "LibVLC reported an error in profile ${profile.name}"
+                            }
                         }
-                        BridgeLogStore.info("Bridge $bridgeId VLC event: $name")
-                        if (event.type == MediaPlayer.Event.EncounteredError) {
+                    })
+
+                    val media = Media(vlc, Uri.parse(rtspUrl))
+                    media.setHWDecoderEnabled(profile.hardwareDecode, false)
+                    media.addOption(":sout=${profile.sout}")
+                    media.addOption(":sout-all")
+                    media.addOption(":no-sout-audio")
+                    if (profile.name == "remux") {
+                        media.addOption(":no-audio")
+                    }
+
+                    player.setMedia(media)
+                    media.release()
+                    BridgeLogStore.info("Bridge $bridgeId starting playback (${profile.name})")
+                    player.play()
+
+                    var second = 0
+                    while (second < 20) {
+                        if (playlistFile.exists()) {
+                            BridgeLogStore.info("Bridge $bridgeId playlist exists after ${second + 1} seconds (${profile.name})")
                             notifyState(
                                 BridgeState(
                                     bridgeId = bridgeId,
                                     rtspUrl = rtspUrl,
                                     playlistUrl = "/hls/$bridgeId/index.m3u8",
-                                    status = "error",
-                                    message = "LibVLC reported an error; open logs for details",
+                                    status = "running",
+                                    message = "Bridge is live via ${profile.name}",
                                 ),
                             )
+                            profileSucceeded = true
+                            break
                         }
+                        if (errorSeen.get()) {
+                            BridgeLogStore.warn("Bridge $bridgeId profile ${profile.name} failed early: ${errorMessage[0]}")
+                            break
+                        }
+                        BridgeLogStore.info("Bridge $bridgeId waiting for HLS output (${profile.name}) ${second + 1}/20")
+                        TimeUnit.SECONDS.sleep(1)
+                        second += 1
                     }
-                })
 
-                val media = Media(vlc, Uri.parse(rtspUrl))
-                media.setHWDecoderEnabled(true, false)
-                media.addOption(":sout=$sout")
-                media.addOption(":sout-all")
-                media.addOption(":no-sout-audio")
-
-                player.setMedia(media)
-                media.release()
-                BridgeLogStore.info("Bridge $bridgeId starting playback")
-                player.play()
-            } catch (exception: Exception) {
-                BridgeLogStore.error("Bridge $bridgeId failed to start: ${exception.stackTraceToString()}")
-                notifyState(
-                    BridgeState(
-                        bridgeId = bridgeId,
-                        rtspUrl = rtspUrl,
-                        playlistUrl = "/hls/$bridgeId/index.m3u8",
-                        status = "error",
-                        message = exception.message ?: "Bridge failed to start",
-                    ),
-                )
-            }
-        }
-
-        thread(name = "RtspHlsBridgeWait-$bridgeId", isDaemon = true) {
-            repeat(30) { attempt ->
-                if (playlistFile.exists()) {
-                    BridgeLogStore.info("Bridge $bridgeId playlist exists after ${attempt + 1} seconds")
-                    notifyState(
-                        BridgeState(
-                            bridgeId = bridgeId,
-                            rtspUrl = rtspUrl,
-                            playlistUrl = "/hls/$bridgeId/index.m3u8",
-                            status = "running",
-                            message = "Bridge is live",
-                        ),
-                    )
-                    return@thread
+                    if (!errorSeen.get()) {
+                        BridgeLogStore.warn("Bridge $bridgeId profile ${profile.name} timed out without HLS output")
+                    }
+                } catch (exception: Exception) {
+                    BridgeLogStore.error("Bridge $bridgeId profile ${profile.name} failed: ${exception.stackTraceToString()}")
+                } finally {
+                    if (!profileSucceeded) {
+                        stop()
+                    }
                 }
-                BridgeLogStore.info("Bridge $bridgeId waiting for HLS output (${attempt + 1}/30)")
-                TimeUnit.SECONDS.sleep(1)
+                if (profileSucceeded) return@thread
             }
-            if (!playlistFile.exists()) {
-                BridgeLogStore.error("Bridge $bridgeId timed out waiting for HLS output")
-                notifyState(
-                    BridgeState(
-                        bridgeId = bridgeId,
-                        rtspUrl = rtspUrl,
-                        playlistUrl = "/hls/$bridgeId/index.m3u8",
-                        status = "error",
-                        message = "Timed out waiting for HLS output",
-                    ),
-                )
-            }
+
+            BridgeLogStore.error("Bridge $bridgeId exhausted all profiles without generating HLS")
+            notifyState(
+                BridgeState(
+                    bridgeId = bridgeId,
+                    rtspUrl = rtspUrl,
+                    playlistUrl = "/hls/$bridgeId/index.m3u8",
+                    status = "error",
+                    message = "All bridge profiles failed; open logs for details",
+                ),
+            )
         }
 
         return BridgeLaunch(bridgeId, playlistFile, "/hls/$bridgeId/index.m3u8")
@@ -177,8 +236,18 @@ class RtspHlsBridge(
         libVlc = null
     }
 
-    private fun buildSout(playlistPath: String, segmentPath: String, indexUrl: String): String {
-        return "#transcode{vcodec=h264,vb=900,acodec=mp4a,ab=128,channels=2,samplerate=44100}:std{access=livehttp{seglen=2,delsegs=true,numsegs=6,index=$playlistPath,index-url=$indexUrl},mux=ts{use-key-frames},dst=$segmentPath}"
+    private fun buildSout(
+        playlistPath: String,
+        segmentPath: String,
+        indexUrl: String,
+        videoTranscode: String?,
+        audioTranscode: String?,
+    ): String {
+        val transcodeParts = mutableListOf<String>()
+        if (videoTranscode != null) transcodeParts += videoTranscode
+        if (audioTranscode != null) transcodeParts += audioTranscode
+        val transcode = if (transcodeParts.isEmpty()) "" else "#transcode{${transcodeParts.joinToString(",")}}:"
+        return "${transcode}std{access=livehttp{seglen=2,delsegs=true,numsegs=6,index=$playlistPath,index-url=$indexUrl},mux=ts{use-key-frames},dst=$segmentPath}"
     }
 
     private fun bridgeKeyFor(rtspUrl: String): String {
