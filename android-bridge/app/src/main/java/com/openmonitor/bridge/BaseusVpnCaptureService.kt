@@ -9,7 +9,6 @@ import android.os.Build
 import android.os.ParcelFileDescriptor
 import androidx.core.app.NotificationCompat
 import java.io.FileInputStream
-import java.net.InetAddress
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.atomic.AtomicBoolean
@@ -20,6 +19,8 @@ class BaseusVpnCaptureService : VpnService() {
     private var tunInterface: ParcelFileDescriptor? = null
     @Volatile
     private var worker: Thread? = null
+    @Volatile
+    private var targetIp: String = DEFAULT_TARGET_IP
 
     override fun onCreate() {
         super.onCreate()
@@ -27,6 +28,7 @@ class BaseusVpnCaptureService : VpnService() {
     }
 
     override fun onStartCommand(intent: android.content.Intent?, flags: Int, startId: Int): Int {
+        targetIp = intent?.getStringExtra(EXTRA_TARGET_IP).orEmpty().ifBlank { DEFAULT_TARGET_IP }
         when (intent?.action) {
             ACTION_STOP -> stopCapture()
             else -> startCapture()
@@ -48,20 +50,20 @@ class BaseusVpnCaptureService : VpnService() {
 
     private fun startCapture() {
         if (!running.compareAndSet(false, true)) {
-            updateState(true, "VPN capture already running for ${targetPackage()}")
+            updateState(true, "VPN capture already running for ${targetPackage()} → $targetIp")
             startForeground(NOTIFICATION_ID, buildNotification())
             return
         }
         startForeground(NOTIFICATION_ID, buildNotification())
-        updateState(true, "Starting VPN capture for ${targetPackage()}")
+        updateState(true, "Starting VPN capture for ${targetPackage()} → $targetIp")
         worker = Thread {
             try {
                 val builder = Builder()
                     .setSession("OpenMonitor Baseus capture")
                     .setMtu(1500)
-                    .setBlocking(true)
+                    .allowBypass()
                     .addAddress("10.0.0.2", 32)
-                    .addRoute("0.0.0.0", 0)
+                    .addRoute(targetIp, 32)
                     .addDnsServer("1.1.1.1")
 
                 runCatching {
@@ -83,8 +85,8 @@ class BaseusVpnCaptureService : VpnService() {
     private fun establishAndCapture(builder: Builder) {
         val fd = builder.establish() ?: throw IllegalStateException("VPN establish returned null")
         tunInterface = fd
-        updateState(true, "VPN capture running for ${targetPackage()}")
-        BridgeLogStore.info("VPN capture established for ${targetPackage()}")
+        updateState(true, "VPN capture running for ${targetPackage()} → $targetIp")
+        BridgeLogStore.info("VPN capture established for ${targetPackage()} → $targetIp")
 
         FileInputStream(fd.fileDescriptor).use { input ->
             val buffer = ByteArray(32767)
@@ -99,6 +101,7 @@ class BaseusVpnCaptureService : VpnService() {
     }
 
     private fun parsePacket(packet: ByteArray, length: Int) {
+        val captureTargetIp = targetIp
         if (length < 20) return
         val version = (packet[0].toInt() ushr 4) and 0x0F
         if (version != 4) return
@@ -119,13 +122,13 @@ class BaseusVpnCaptureService : VpnService() {
                 val ack = flags and 0x10 != 0
                 val fin = flags and 0x01 != 0
                 val rst = flags and 0x04 != 0
-                if (syn || fin || rst || destinationPort == 443 || destinationPort == 554 || destinationPort == 8554) {
+                if ((sourceIp == captureTargetIp || destinationIp == captureTargetIp) && (syn || fin || rst || destinationPort == 443 || destinationPort == 554 || destinationPort == 8554 || sourcePort == 443 || sourcePort == 554 || sourcePort == 8554)) {
                     val payloadLength = totalLength - ihl - (((packet[ihl + 12].toInt() ushr 4) and 0x0F) * 4)
                     BridgeLogStore.info(
                         "VPN TCP $sourceIp:$sourcePort -> $destinationIp:$destinationPort flags=${tcpFlags(flags)} payload=$payloadLength",
                     )
                     BaseusVpnCaptureStateStore.update {
-                        it.copy(message = "TCP $sourceIp:$sourcePort -> $destinationIp:$destinationPort")
+                        it.copy(message = "TCP $sourceIp:$sourcePort -> $destinationIp:$destinationPort", targetIp = captureTargetIp)
                     }
                 }
             }
@@ -133,13 +136,13 @@ class BaseusVpnCaptureService : VpnService() {
                 if (length < ihl + 8) return
                 val sourcePort = readUnsignedShort(packet, ihl)
                 val destinationPort = readUnsignedShort(packet, ihl + 2)
-                if (sourcePort == 53 || destinationPort == 53 || sourcePort == 443 || destinationPort == 443 || sourcePort == 554 || destinationPort == 554) {
+                if ((sourceIp == captureTargetIp || destinationIp == captureTargetIp) && (sourcePort == 53 || destinationPort == 53 || sourcePort == 443 || destinationPort == 443 || sourcePort == 554 || destinationPort == 554 || sourcePort == 8554 || destinationPort == 8554)) {
                     BridgeLogStore.info("VPN UDP $sourceIp:$sourcePort -> $destinationIp:$destinationPort length=$totalLength")
                     if (sourcePort == 53 || destinationPort == 53) {
                         parseDns(packet, ihl + 8, totalLength - ihl - 8, sourceIp, destinationIp)
                     }
                     BaseusVpnCaptureStateStore.update {
-                        it.copy(message = "UDP $sourceIp:$sourcePort -> $destinationIp:$destinationPort")
+                        it.copy(message = "UDP $sourceIp:$sourcePort -> $destinationIp:$destinationPort", targetIp = captureTargetIp)
                     }
                 }
             }
@@ -242,7 +245,7 @@ class BaseusVpnCaptureService : VpnService() {
 
     private fun updateState(running: Boolean, message: String) {
         BaseusVpnCaptureStateStore.update {
-            it.copy(running = running, message = message, packageName = targetPackage())
+            it.copy(running = running, message = message, packageName = targetPackage(), targetIp = targetIp)
         }
     }
 
@@ -259,7 +262,7 @@ class BaseusVpnCaptureService : VpnService() {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_warning)
             .setContentTitle("OpenMonitor VPN capture")
-            .setContentText("Capturing traffic for ${targetPackage()}")
+            .setContentText("Capturing traffic for ${targetPackage()} → $targetIp")
             .setOngoing(true)
             .addAction(android.R.drawable.ic_media_pause, "Stop", stopPendingIntent)
             .build()
@@ -285,9 +288,13 @@ class BaseusVpnCaptureService : VpnService() {
         private const val CHANNEL_ID = "openmonitor_vpn_capture"
         private const val NOTIFICATION_ID = 2003
         private const val ACTION_STOP = "com.openmonitor.bridge.action.STOP_VPN_CAPTURE"
+        private const val EXTRA_TARGET_IP = "extra_target_ip"
+        private const val DEFAULT_TARGET_IP = "192.168.4.25"
 
-        fun startIntent(context: android.content.Context): android.content.Intent {
-            return android.content.Intent(context, BaseusVpnCaptureService::class.java)
+        fun startIntent(context: android.content.Context, targetIp: String = DEFAULT_TARGET_IP): android.content.Intent {
+            return android.content.Intent(context, BaseusVpnCaptureService::class.java).apply {
+                putExtra(EXTRA_TARGET_IP, targetIp)
+            }
         }
 
         fun stopIntent(context: android.content.Context): android.content.Intent {

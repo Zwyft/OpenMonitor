@@ -43,6 +43,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var vpnStartButton: Button
     private lateinit var vpnStopButton: Button
     private lateinit var vicohomeButton: Button
+    private var pendingVpnTargetIp: String = "192.168.4.25"
     private lateinit var startButton: Button
     private lateinit var stopButton: Button
     private lateinit var vicohomeContainer: LinearLayout
@@ -239,7 +240,7 @@ class MainActivity : AppCompatActivity() {
         ActivityResultContracts.StartActivityForResult(),
     ) { result ->
         if (result.resultCode == RESULT_OK) {
-            ContextCompat.startForegroundService(this, BaseusVpnCaptureService.startIntent(this))
+            ContextCompat.startForegroundService(this, BaseusVpnCaptureService.startIntent(this, pendingVpnTargetIp))
         } else {
             scanStatusView.text = "VPN permission denied."
         }
@@ -248,11 +249,18 @@ class MainActivity : AppCompatActivity() {
     private fun startVpnCapture() {
         scanStatusView.text = "Preparing VPN capture..."
         BridgeLogStore.info("Baseus VPN capture requested")
+        val targetIp = baseusTargetsInput.text?.toString()
+            .orEmpty()
+            .split(',', ';', ' ', '\n', '\t')
+            .map { it.trim() }
+            .firstOrNull { it.isNotBlank() }
+            ?: "192.168.4.25"
+        pendingVpnTargetIp = targetIp
         val intent = android.net.VpnService.prepare(this)
         if (intent != null) {
             vpnPermissionLauncher.launch(intent)
         } else {
-            ContextCompat.startForegroundService(this, BaseusVpnCaptureService.startIntent(this))
+            ContextCompat.startForegroundService(this, BaseusVpnCaptureService.startIntent(this, targetIp))
         }
     }
 
