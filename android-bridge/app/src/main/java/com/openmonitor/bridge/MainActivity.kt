@@ -22,6 +22,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var statusView: TextView
     private lateinit var scanStatusView: TextView
     private lateinit var baseusTargetsInput: EditText
+    private lateinit var vicohomeEmailInput: EditText
+    private lateinit var vicohomePasswordInput: EditText
     private lateinit var serverView: TextView
     private lateinit var hlsView: TextView
     private lateinit var bridgeIdView: TextView
@@ -31,8 +33,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var passwordInput: EditText
     private lateinit var scanButton: Button
     private lateinit var captureButton: Button
+    private lateinit var vicohomeButton: Button
     private lateinit var startButton: Button
     private lateinit var stopButton: Button
+    private lateinit var vicohomeContainer: LinearLayout
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
@@ -55,20 +59,25 @@ class MainActivity : AppCompatActivity() {
         statusView = findViewById(R.id.statusValue)
         scanStatusView = findViewById(R.id.scanStatusValue)
         baseusTargetsInput = findViewById(R.id.baseusTargetsInput)
+        vicohomeEmailInput = findViewById(R.id.vicohomeEmailInput)
+        vicohomePasswordInput = findViewById(R.id.vicohomePasswordInput)
         serverView = findViewById(R.id.serverValue)
         hlsView = findViewById(R.id.hlsValue)
         bridgeIdView = findViewById(R.id.bridgeIdValue)
         logView = findViewById(R.id.logValue)
         cameraContainer = findViewById(R.id.cameraContainer)
+        vicohomeContainer = findViewById(R.id.vicohomeContainer)
         usernameInput = findViewById(R.id.usernameInput)
         passwordInput = findViewById(R.id.passwordInput)
         scanButton = findViewById(R.id.scanButton)
         captureButton = findViewById(R.id.captureButton)
+        vicohomeButton = findViewById(R.id.vicohomeButton)
         startButton = findViewById(R.id.startButton)
         stopButton = findViewById(R.id.stopButton)
 
         scanButton.setOnClickListener { scanCameras() }
         captureButton.setOnClickListener { captureBaseus() }
+        vicohomeButton.setOnClickListener { syncVicohome() }
         startButton.setOnClickListener { startBridge() }
         stopButton.setOnClickListener { stopBridge() }
 
@@ -183,6 +192,44 @@ class MainActivity : AppCompatActivity() {
         }.start()
     }
 
+    private fun syncVicohome() {
+        vicohomeButton.isEnabled = false
+        val email = vicohomeEmailInput.text?.toString().orEmpty().trim()
+        val password = vicohomePasswordInput.text?.toString().orEmpty().trim()
+        if (email.isBlank() || password.isBlank()) {
+            scanStatusView.text = "Enter Vicohome email and password first."
+            vicohomeButton.isEnabled = true
+            return
+        }
+        scanStatusView.text = "Syncing Vicohome cloud data..."
+        BridgeLogStore.info("Vicohome sync requested for $email")
+        Thread {
+            try {
+                val client = VicohomeClient(email, password)
+                val result = client.syncRecentData { progress ->
+                    BridgeLogStore.info(progress)
+                    runOnUiThread {
+                        scanStatusView.text = progress
+                    }
+                }
+                VicohomeDataStore.update(result)
+                runOnUiThread {
+                    scanStatusView.text = result.message
+                    renderVicohomeEntries()
+                }
+            } catch (exception: Exception) {
+                BridgeLogStore.error("Vicohome sync failed: ${exception.stackTraceToString()}")
+                runOnUiThread {
+                    scanStatusView.text = "Vicohome sync failed: ${exception.message ?: "unknown error"}"
+                }
+            } finally {
+                runOnUiThread {
+                    vicohomeButton.isEnabled = true
+                }
+            }
+        }.start()
+    }
+
     private fun startBridge() {
         val rtspUrl = rtspInput.text?.toString().orEmpty().trim()
         if (rtspUrl.isBlank()) {
@@ -209,6 +256,7 @@ class MainActivity : AppCompatActivity() {
             .joinToString("\n") { it.formatLine() }
             .ifBlank { "No logs yet." }
         renderCameraCandidates()
+        renderVicohomeEntries()
     }
 
     private fun renderCameraCandidates() {
@@ -232,6 +280,69 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             cameraContainer.addView(button)
+        }
+    }
+
+    private fun renderVicohomeEntries() {
+        val devices = VicohomeDataStore.snapshotDevices()
+        val events = VicohomeDataStore.snapshotEvents()
+        vicohomeContainer.removeAllViews()
+
+        vicohomeContainer.addView(TextView(this).apply {
+            text = VicohomeDataStore.snapshotMessage().ifBlank { "No Vicohome data loaded yet." }
+            setTextColor(0xFF94A3B8.toInt())
+        })
+
+        if (devices.isNotEmpty()) {
+            vicohomeContainer.addView(TextView(this).apply {
+                text = "Devices"
+                setTextColor(0xFFCBD5E1.toInt())
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+            })
+            devices.forEach { device ->
+                vicohomeContainer.addView(TextView(this).apply {
+                    text = buildString {
+                        append(device.deviceName.ifBlank { device.serialNumber })
+                        append(" • ")
+                        append(device.modelNo.ifBlank { "unknown model" })
+                        if (device.ip.isNotBlank()) {
+                            append(" • ")
+                            append(device.ip)
+                        }
+                    }
+                    setTextColor(0xFFE2E8F0.toInt())
+                })
+            }
+        }
+
+        if (events.isNotEmpty()) {
+            vicohomeContainer.addView(TextView(this).apply {
+                text = "Recent clips"
+                setTextColor(0xFFCBD5E1.toInt())
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+            })
+            events.take(20).forEach { event ->
+                vicohomeContainer.addView(Button(this).apply {
+                    text = buildString {
+                        append(event.deviceName.ifBlank { event.traceId })
+                        append(" • ")
+                        append(event.timestamp)
+                        if (event.birdName.isNotBlank()) {
+                            append(" • ")
+                            append(event.birdName)
+                        }
+                    }
+                    setOnClickListener {
+                        statusView.text = "Selected Vicohome clip"
+                        scanStatusView.text = event.videoUrl.ifBlank { "No clip URL available" }
+                    }
+                })
+            }
+        } else {
+            vicohomeContainer.addView(TextView(this).apply {
+                text = "No recent Vicohome clips loaded."
+                setTextColor(0xFF94A3B8.toInt())
+            })
         }
     }
 }

@@ -64,6 +64,8 @@ class BridgeHttpServer(
                 method == "GET" && path == "/api/state" -> respondText(output, 200, "application/json; charset=utf-8", BridgeStateStore.snapshot().toJson())
                 method == "GET" && path == "/api/logs" -> respondText(output, 200, "application/json; charset=utf-8", logsJson())
                 method == "GET" && path == "/api/cameras" -> respondText(output, 200, "application/json; charset=utf-8", camerasJson())
+                method == "GET" && path == "/api/vicohome/devices" -> respondText(output, 200, "application/json; charset=utf-8", vicohomeDevicesJson())
+                method == "GET" && path == "/api/vicohome/events" -> respondText(output, 200, "application/json; charset=utf-8", vicohomeEventsJson())
                 method == "GET" && path.startsWith("/hls/") -> serveFile(output, path.removePrefix("/hls/"))
                 else -> respondText(output, 404, "text/plain; charset=utf-8", "Not found")
             }
@@ -101,6 +103,10 @@ class BridgeHttpServer(
                 <h2>Discovered cameras</h2>
                 <div style="background:#0b1220; border-radius:12px; padding:12px; max-height:240px; overflow:auto;">
                   ${camerasListHtml()}
+                </div>
+                <h2>Vicohome cloud data</h2>
+                <div style="background:#0b1220; border-radius:12px; padding:12px; max-height:320px; overflow:auto;">
+                  ${vicohomeListHtml()}
                 </div>
                 <h2>Logs</h2>
                 <pre style="white-space: pre-wrap; word-break: break-word; background:#0b1220; border-radius:12px; padding:12px; max-height:320px; overflow:auto;">${escapeHtml(logsText(40))}</pre>
@@ -270,6 +276,145 @@ class BridgeHttpServer(
                 append("\",\"needsAuth\":")
                 append(camera.needsAuth)
                 append("}")
+            }
+            append("]}")
+        }
+    }
+
+    private fun vicohomeListHtml(): String {
+        val devices = VicohomeDataStore.snapshotDevices()
+        val events = VicohomeDataStore.snapshotEvents()
+        val message = VicohomeDataStore.snapshotMessage().ifBlank { "No Vicohome data loaded yet." }
+        return buildString {
+            append("<div class=\"muted\">")
+            append(escapeHtml(message))
+            append("</div>")
+            if (devices.isNotEmpty()) {
+                append("<h3>Devices</h3>")
+                append("<ul style=\"margin:0; padding-left:20px;\">")
+                devices.forEach { device ->
+                    append("<li style=\"margin-bottom:8px;\">")
+                    append("<div><strong>")
+                    append(escapeHtml(device.deviceName.ifBlank { device.serialNumber }))
+                    append("</strong> — ")
+                    append(escapeHtml(device.modelNo.ifBlank { "unknown model" }))
+                    if (device.ip.isNotBlank()) {
+                        append(" — ")
+                        append(escapeHtml(device.ip))
+                    }
+                    append("</div>")
+                    if (device.locationName.isNotBlank()) {
+                        append("<div class=\"muted\">")
+                        append(escapeHtml(device.locationName))
+                        append("</div>")
+                    }
+                    append("</li>")
+                }
+                append("</ul>")
+            }
+            if (events.isNotEmpty()) {
+                append("<h3>Recent clips</h3>")
+                append("<ul style=\"margin:0; padding-left:20px;\">")
+                events.take(20).forEach { event ->
+                    append("<li style=\"margin-bottom:8px;\">")
+                    append("<div><strong>")
+                    append(escapeHtml(event.deviceName.ifBlank { event.traceId }))
+                    append("</strong> — ")
+                    append(escapeHtml(event.timestamp))
+                    if (event.birdName.isNotBlank()) {
+                        append(" — ")
+                        append(escapeHtml(event.birdName))
+                    }
+                    append("</div>")
+                    if (event.videoUrl.isNotBlank()) {
+                        append("<div><a href=\"")
+                        append(escapeHtml(event.videoUrl))
+                        append("\">")
+                        append(escapeHtml(event.videoUrl))
+                        append("</a></div>")
+                    }
+                    append("</li>")
+                }
+                append("</ul>")
+            }
+        }
+    }
+
+    private fun vicohomeDevicesJson(): String {
+        val devices = VicohomeDataStore.snapshotDevices()
+        return buildString {
+            append('{')
+            append("\"message\":\"")
+            append(VicohomeDataStore.snapshotMessage().jsonEscape())
+            append("\",\"entries\":[")
+            devices.forEachIndexed { index, device ->
+                if (index > 0) append(',')
+                append('{')
+                append("\"serialNumber\":\"")
+                append(device.serialNumber.jsonEscape())
+                append("\",\"modelNo\":\"")
+                append(device.modelNo.jsonEscape())
+                append("\",\"deviceName\":\"")
+                append(device.deviceName.jsonEscape())
+                append("\",\"networkName\":\"")
+                append(device.networkName.jsonEscape())
+                append("\",\"ip\":\"")
+                append(device.ip.jsonEscape())
+                append("\",\"batteryLevel\":")
+                append(device.batteryLevel)
+                append(",\"locationName\":\"")
+                append(device.locationName.jsonEscape())
+                append("\",\"signalStrength\":")
+                append(device.signalStrength)
+                append(",\"wifiChannel\":")
+                append(device.wifiChannel)
+                append(",\"isCharging\":")
+                append(device.isCharging)
+                append(",\"chargingMode\":")
+                append(device.chargingMode)
+                append(",\"macAddress\":\"")
+                append(device.macAddress.jsonEscape())
+                append("\"}")
+            }
+            append("]}")
+        }
+    }
+
+    private fun vicohomeEventsJson(): String {
+        val events = VicohomeDataStore.snapshotEvents()
+        return buildString {
+            append('{')
+            append("\"message\":\"")
+            append(VicohomeDataStore.snapshotMessage().jsonEscape())
+            append("\",\"entries\":[")
+            events.forEachIndexed { index, event ->
+                if (index > 0) append(',')
+                append('{')
+                append("\"traceId\":\"")
+                append(event.traceId.jsonEscape())
+                append("\",\"timestamp\":\"")
+                append(event.timestamp.jsonEscape())
+                append("\",\"deviceName\":\"")
+                append(event.deviceName.jsonEscape())
+                append("\",\"serialNumber\":\"")
+                append(event.serialNumber.jsonEscape())
+                append("\",\"adminName\":\"")
+                append(event.adminName.jsonEscape())
+                append("\",\"period\":\"")
+                append(event.period.jsonEscape())
+                append("\",\"birdName\":\"")
+                append(event.birdName.jsonEscape())
+                append("\",\"birdLatin\":\"")
+                append(event.birdLatin.jsonEscape())
+                append("\",\"birdConfidence\":")
+                append(event.birdConfidence)
+                append(",\"keyShotUrl\":\"")
+                append(event.keyShotUrl.jsonEscape())
+                append("\",\"imageUrl\":\"")
+                append(event.imageUrl.jsonEscape())
+                append("\",\"videoUrl\":\"")
+                append(event.videoUrl.jsonEscape())
+                append("\"}")
             }
             append("]}")
         }

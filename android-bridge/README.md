@@ -9,6 +9,7 @@ This is a phone-hosted RTSP-to-HLS bridge app.
 - Serves the HLS playlist and segments over HTTP so another device can open them in a browser.
 - Scans the LAN for ONVIF and RTSP cameras and tries to resolve a usable stream URI automatically.
 - Probes common vendor RTSP path patterns including Hikvision, Dahua/Amcrest, Axis, Reolink, Foscam, and Uniview-style paths.
+- Logs into Vicohome/Baseus cloud accounts and pulls recent device/event clips from the cloud API.
 
 ## What it does not do yet
 - Full packet-level Wireshark-style sniffing of other apps.
@@ -20,6 +21,8 @@ This is a phone-hosted RTSP-to-HLS bridge app.
 - Tap `Scan cameras` first, then choose a discovered camera or paste a stream URL manually.
 - For Baseus X1 Pro specifically, use `Capture Baseus` with the camera IP, such as `192.168.4.25`.
 - Capture mode aggressively probes the camera itself for Baseus/VicoHome-style HTTP and RTSP endpoints and logs every candidate it finds.
+- If local probing fails, enter your Vicohome account email/password and tap `Vicohome sync` to load cloud devices and recent clips.
+- Recent clips are HLS URLs from Vicohome’s cloud API; tap one to start playback on the phone or open the URL from the iPad browser.
 - Tapping a discovered camera will immediately start the bridge with that URI.
 - Enter optional credentials if the camera requires them.
 - Start the bridge, then open `http://<phone-ip>:18480/` from your iPad or another browser.
@@ -36,6 +39,7 @@ This is a phone-hosted RTSP-to-HLS bridge app.
 - If the HLS URL returns `Not found`, make sure you are using the current phone IP shown on the bridge screen.
 - If the scanner finds the camera IP but no stream, the camera may use a vendor path outside the current probe list and we can add it next.
 - If Baseus capture mode still finds nothing, the camera may be exposing only a hub/cloud relay path or a vendor-locked stream that needs traffic capture from the phone app itself.
+- If Vicohome sync succeeds but clips still fail to play, the cloud URL may be expiring too quickly or the account may require a different region/API host.
 
 ## GitHub Actions
 - A workflow at `.github/workflows/build-android-bridge-apk.yml` builds a debug APK and uploads it as an artifact.
@@ -44,3 +48,4 @@ This is a phone-hosted RTSP-to-HLS bridge app.
 ## Recommended next step
 - If you still need more camera compatibility, the next pass is vendor-specific path probing and auth handling for the Baseus cameras.
 - If you still need more camera compatibility, the next pass is app-traffic capture or camera/hub firmware analysis for the Baseus cameras.
+- If you need live feeds and the Vicohome cloud only exposes event clips, the next pass is traffic capture from the Baseus app itself.
