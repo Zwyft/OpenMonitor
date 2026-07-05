@@ -132,8 +132,14 @@ fun baseusCloudLivePage(serverUrl: String): String {
                 <select id="deviceSelect"></select>
               </div>
 
+              <div class="field">
+                <label for="manualTarget">Manual serial or IP</label>
+                <input id="manualTarget" placeholder="Enter device serial or 192.168.4.25">
+              </div>
+
               <div class="row">
                 <button id="refreshButton" class="secondary">Refresh devices</button>
+                <button id="useManualButton" class="secondary">Use manual target</button>
                 <button id="startButton">Start live</button>
                 <button id="stopButton" class="secondary" disabled>Stop</button>
               </div>
@@ -153,11 +159,13 @@ fun baseusCloudLivePage(serverUrl: String): String {
           (function () {
             var deviceSelect = document.getElementById("deviceSelect");
             var refreshButton = document.getElementById("refreshButton");
+            var useManualButton = document.getElementById("useManualButton");
             var startButton = document.getElementById("startButton");
             var stopButton = document.getElementById("stopButton");
             var statusLog = document.getElementById("statusLog");
             var sessionBadge = document.getElementById("sessionBadge");
             var liveVideo = document.getElementById("liveVideo");
+            var manualTargetInput = document.getElementById("manualTarget");
             var signalSocket = null;
             var peerConnection = null;
             var dataChannel = null;
@@ -293,6 +301,16 @@ fun baseusCloudLivePage(serverUrl: String): String {
                     }
                   }
                 }
+                if (!deviceSelect.value && (selectDefaultSerial || selectDefaultIp)) {
+                  var fallbackValue = selectDefaultSerial || selectDefaultIp;
+                  var fallbackOption = document.createElement("option");
+                  fallbackOption.value = fallbackValue;
+                  fallbackOption.textContent = "Manual target • " + fallbackValue;
+                  fallbackOption.selected = true;
+                  deviceSelect.insertBefore(fallbackOption, deviceSelect.firstChild);
+                  log("No cloud device matched; using manual target " + fallbackValue);
+                }
+                manualTargetInput.value = selectDefaultSerial || selectDefaultIp || "";
               });
             }
 
@@ -486,7 +504,7 @@ fun baseusCloudLivePage(serverUrl: String): String {
             }
 
             function startLive() {
-              var serial = deviceSelect.value || "";
+              var serial = deviceSelect.value || manualTargetInput.value.trim() || "";
               if (!serial) {
                 log("Select a camera first");
                 return;
@@ -597,6 +615,30 @@ fun baseusCloudLivePage(serverUrl: String): String {
 
             refreshButton.onclick = function () {
               loadDevices(currentSerial, preferredIp);
+            };
+            useManualButton.onclick = function () {
+              var manualTarget = manualTargetInput.value.trim();
+              if (!manualTarget) {
+                log("Enter a serial number or IP first");
+                return;
+              }
+              var existing = false;
+              for (var i = 0; i < deviceSelect.options.length; i += 1) {
+                if ((deviceSelect.options[i].value || "") === manualTarget) {
+                  deviceSelect.selectedIndex = i;
+                  existing = true;
+                  break;
+                }
+              }
+              if (!existing) {
+                var option = document.createElement("option");
+                option.value = manualTarget;
+                option.textContent = "Manual target • " + manualTarget;
+                option.selected = true;
+                deviceSelect.appendChild(option);
+              }
+              deviceSelect.value = manualTarget;
+              log("Using manual target " + manualTarget);
             };
             startButton.onclick = startLive;
             stopButton.onclick = stopLive;
