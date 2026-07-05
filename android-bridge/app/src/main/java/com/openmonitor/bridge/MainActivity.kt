@@ -7,9 +7,11 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.Spinner
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -24,6 +26,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var baseusTargetsInput: EditText
     private lateinit var vicohomeEmailInput: EditText
     private lateinit var vicohomePasswordInput: EditText
+    private lateinit var vicohomeRegionSpinner: Spinner
     private lateinit var serverView: TextView
     private lateinit var hlsView: TextView
     private lateinit var bridgeIdView: TextView
@@ -61,6 +64,7 @@ class MainActivity : AppCompatActivity() {
         baseusTargetsInput = findViewById(R.id.baseusTargetsInput)
         vicohomeEmailInput = findViewById(R.id.vicohomeEmailInput)
         vicohomePasswordInput = findViewById(R.id.vicohomePasswordInput)
+        vicohomeRegionSpinner = findViewById(R.id.vicohomeRegionSpinner)
         serverView = findViewById(R.id.serverValue)
         hlsView = findViewById(R.id.hlsValue)
         bridgeIdView = findViewById(R.id.bridgeIdValue)
@@ -80,6 +84,14 @@ class MainActivity : AppCompatActivity() {
         vicohomeButton.setOnClickListener { syncVicohome() }
         startButton.setOnClickListener { startBridge() }
         stopButton.setOnClickListener { stopBridge() }
+
+        vicohomeRegionSpinner.adapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_spinner_item,
+            VicohomeRegionChoice.entries.map { it.displayName },
+        ).apply {
+            setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        }
 
         requestRequiredPermissions()
         renderState()
@@ -197,15 +209,16 @@ class MainActivity : AppCompatActivity() {
         val email = vicohomeEmailInput.text?.toString().orEmpty().trim()
         val password = vicohomePasswordInput.text?.toString().orEmpty().trim()
         if (email.isBlank() || password.isBlank()) {
-            scanStatusView.text = "Enter Vicohome email and password first."
+            scanStatusView.text = "Enter Baseus / Vicohome email and password first."
             vicohomeButton.isEnabled = true
             return
         }
-        scanStatusView.text = "Syncing Vicohome cloud data..."
-        BridgeLogStore.info("Vicohome sync requested for $email")
+        scanStatusView.text = "Syncing Baseus cloud data..."
+        BridgeLogStore.info("Vicohome/Baseus cloud sync requested for $email")
         Thread {
             try {
-                val client = VicohomeClient(email, password)
+                val regionChoice = VicohomeRegionChoice.entries[vicohomeRegionSpinner.selectedItemPosition.coerceIn(0, VicohomeRegionChoice.entries.lastIndex)]
+                val client = VicohomeClient(email, password, regionChoice)
                 val result = client.syncRecentData { progress ->
                     BridgeLogStore.info(progress)
                     runOnUiThread {
@@ -218,9 +231,9 @@ class MainActivity : AppCompatActivity() {
                     renderVicohomeEntries()
                 }
             } catch (exception: Exception) {
-                BridgeLogStore.error("Vicohome sync failed: ${exception.stackTraceToString()}")
+                BridgeLogStore.error("Vicohome/Baseus cloud sync failed: ${exception.stackTraceToString()}")
                 runOnUiThread {
-                    scanStatusView.text = "Vicohome sync failed: ${exception.message ?: "unknown error"}"
+                    scanStatusView.text = "Baseus cloud sync failed: ${exception.message ?: "unknown error"}"
                 }
             } finally {
                 runOnUiThread {
@@ -289,7 +302,7 @@ class MainActivity : AppCompatActivity() {
         vicohomeContainer.removeAllViews()
 
         vicohomeContainer.addView(TextView(this).apply {
-            text = VicohomeDataStore.snapshotMessage().ifBlank { "No Vicohome data loaded yet." }
+            text = VicohomeDataStore.snapshotMessage().ifBlank { "No Baseus cloud data loaded yet." }
             setTextColor(0xFF94A3B8.toInt())
         })
 
@@ -333,14 +346,14 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
                     setOnClickListener {
-                        statusView.text = "Selected Vicohome clip"
+                        statusView.text = "Selected Baseus cloud clip"
                         scanStatusView.text = event.videoUrl.ifBlank { "No clip URL available" }
                     }
                 })
             }
         } else {
             vicohomeContainer.addView(TextView(this).apply {
-                text = "No recent Vicohome clips loaded."
+                text = "No recent Baseus cloud clips loaded."
                 setTextColor(0xFF94A3B8.toInt())
             })
         }

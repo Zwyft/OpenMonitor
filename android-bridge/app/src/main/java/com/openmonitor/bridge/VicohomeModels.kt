@@ -30,6 +30,42 @@ data class VicohomeEvent(
     val videoUrl: String,
 )
 
+enum class VicohomeRegionChoice(
+    val displayName: String,
+) {
+    AUTO("Auto (US then EU)"),
+    US("US"),
+    EU("EU");
+}
+
+data class VicohomeRegion(
+    val label: String,
+    val apiBase: String,
+    val countryNo: String,
+)
+
+object VicohomeRegionCatalog {
+    val us = VicohomeRegion(
+        label = "US",
+        apiBase = "https://api-us.vicohome.io",
+        countryNo = "US",
+    )
+
+    val eu = VicohomeRegion(
+        label = "EU",
+        apiBase = "https://api-eu.vicohome.io",
+        countryNo = "EU",
+    )
+
+    fun choicesFor(choice: VicohomeRegionChoice): List<VicohomeRegion> {
+        return when (choice) {
+            VicohomeRegionChoice.AUTO -> listOf(us, eu)
+            VicohomeRegionChoice.US -> listOf(us)
+            VicohomeRegionChoice.EU -> listOf(eu)
+        }
+    }
+}
+
 data class VicohomeSyncResult(
     val devices: List<VicohomeDevice>,
     val events: List<VicohomeEvent>,

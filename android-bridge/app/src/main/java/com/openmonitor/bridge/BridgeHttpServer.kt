@@ -104,7 +104,7 @@ class BridgeHttpServer(
                 <div style="background:#0b1220; border-radius:12px; padding:12px; max-height:240px; overflow:auto;">
                   ${camerasListHtml()}
                 </div>
-                <h2>Vicohome cloud data</h2>
+                <h2>Baseus cloud data</h2>
                 <div style="background:#0b1220; border-radius:12px; padding:12px; max-height:320px; overflow:auto;">
                   ${vicohomeListHtml()}
                 </div>
@@ -284,7 +284,7 @@ class BridgeHttpServer(
     private fun vicohomeListHtml(): String {
         val devices = VicohomeDataStore.snapshotDevices()
         val events = VicohomeDataStore.snapshotEvents()
-        val message = VicohomeDataStore.snapshotMessage().ifBlank { "No Vicohome data loaded yet." }
+        val message = VicohomeDataStore.snapshotMessage().ifBlank { "No Baseus cloud data loaded yet." }
         return buildString {
             append("<div class=\"muted\">")
             append(escapeHtml(message))

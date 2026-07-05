@@ -10,6 +10,7 @@ This is a phone-hosted RTSP-to-HLS bridge app.
 - Scans the LAN for ONVIF and RTSP cameras and tries to resolve a usable stream URI automatically.
 - Probes common vendor RTSP path patterns including Hikvision, Dahua/Amcrest, Axis, Reolink, Foscam, and Uniview-style paths.
 - Logs into Vicohome/Baseus cloud accounts and pulls recent device/event clips from the cloud API.
+- Tries Vicohome cloud regions automatically first, then lets you force US or EU if your account is region-bound.
 
 ## What it does not do yet
 - Full packet-level Wireshark-style sniffing of other apps.
@@ -21,7 +22,8 @@ This is a phone-hosted RTSP-to-HLS bridge app.
 - Tap `Scan cameras` first, then choose a discovered camera or paste a stream URL manually.
 - For Baseus X1 Pro specifically, use `Capture Baseus` with the camera IP, such as `192.168.4.25`.
 - Capture mode aggressively probes the camera itself for Baseus/VicoHome-style HTTP and RTSP endpoints and logs every candidate it finds.
-- If local probing fails, enter your Vicohome account email/password and tap `Vicohome sync` to load cloud devices and recent clips.
+- If local probing fails, enter your Vicohome account email/password, pick a region, and tap `Vicohome sync` to load cloud devices and recent clips.
+- Leave the region picker on `Auto (US then EU)` if you are not sure which backend your Baseus account uses.
 - Recent clips are HLS URLs from Vicohome’s cloud API; tap one to start playback on the phone or open the URL from the iPad browser.
 - Tapping a discovered camera will immediately start the bridge with that URI.
 - Enter optional credentials if the camera requires them.
@@ -39,6 +41,7 @@ This is a phone-hosted RTSP-to-HLS bridge app.
 - If the HLS URL returns `Not found`, make sure you are using the current phone IP shown on the bridge screen.
 - If the scanner finds the camera IP but no stream, the camera may use a vendor path outside the current probe list and we can add it next.
 - If Baseus capture mode still finds nothing, the camera may be exposing only a hub/cloud relay path or a vendor-locked stream that needs traffic capture from the phone app itself.
+- If Vicohome sync fails with `account not registered`, switch the region picker from `Auto` to `US` or `EU` and retry.
 - If Vicohome sync succeeds but clips still fail to play, the cloud URL may be expiring too quickly or the account may require a different region/API host.
 
 ## GitHub Actions
