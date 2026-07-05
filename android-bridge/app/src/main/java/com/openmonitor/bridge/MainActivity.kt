@@ -29,6 +29,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var baseusTargetsInput: EditText
     private lateinit var proxyStatusView: TextView
     private lateinit var vpnStatusView: TextView
+    private lateinit var vpnModeSpinner: Spinner
     private lateinit var vicohomeEmailInput: EditText
     private lateinit var vicohomePasswordInput: EditText
     private lateinit var vicohomeRegionSpinner: Spinner
@@ -78,6 +79,7 @@ class MainActivity : AppCompatActivity() {
         baseusTargetsInput = findViewById(R.id.baseusTargetsInput)
         proxyStatusView = findViewById(R.id.proxyStatusValue)
         vpnStatusView = findViewById(R.id.vpnStatusValue)
+        vpnModeSpinner = findViewById(R.id.vpnModeSpinner)
         vicohomeEmailInput = findViewById(R.id.vicohomeEmailInput)
         vicohomePasswordInput = findViewById(R.id.vicohomePasswordInput)
         vicohomeRegionSpinner = findViewById(R.id.vicohomeRegionSpinner)
@@ -129,8 +131,16 @@ class MainActivity : AppCompatActivity() {
         ).apply {
             setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         }
+        vpnModeSpinner.adapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_spinner_item,
+            VpnCaptureMode.entries.map { it.displayName },
+        ).apply {
+            setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        }
 
         logFilterSpinner.setSelection(LogFilterPreset.ALL.ordinal)
+        vpnModeSpinner.setSelection(VpnCaptureMode.DNS_ONLY.ordinal)
         logFilterSpinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: android.widget.AdapterView<*>, view: android.view.View?, position: Int, id: Long) {
                 renderLogs()
@@ -276,7 +286,14 @@ class MainActivity : AppCompatActivity() {
         ActivityResultContracts.StartActivityForResult(),
     ) { result ->
         if (result.resultCode == RESULT_OK) {
-            ContextCompat.startForegroundService(this, BaseusVpnCaptureService.startIntent(this, pendingVpnTargetIp))
+            ContextCompat.startForegroundService(
+                this,
+                BaseusVpnCaptureService.startIntent(
+                    this,
+                    pendingVpnTargetIp,
+                    selectedVpnMode(),
+                ),
+            )
         } else {
             scanStatusView.text = "VPN permission denied."
         }
@@ -296,7 +313,7 @@ class MainActivity : AppCompatActivity() {
         if (intent != null) {
             vpnPermissionLauncher.launch(intent)
         } else {
-            ContextCompat.startForegroundService(this, BaseusVpnCaptureService.startIntent(this, targetIp))
+            ContextCompat.startForegroundService(this, BaseusVpnCaptureService.startIntent(this, targetIp, selectedVpnMode()))
         }
     }
 
@@ -498,10 +515,19 @@ class MainActivity : AppCompatActivity() {
             append(" • ")
             append(state.message)
             append("\n")
+            append("Mode: ")
+            append(selectedVpnMode().displayName)
+            append("\n")
             append("Open the Baseus app after starting VPN capture.")
         }
         vpnStartButton.isEnabled = !state.running
         vpnStopButton.isEnabled = state.running
+    }
+
+    private fun selectedVpnMode(): VpnCaptureMode {
+        return VpnCaptureMode.entries.getOrElse(vpnModeSpinner.selectedItemPosition.coerceIn(0, VpnCaptureMode.entries.lastIndex)) {
+            VpnCaptureMode.DNS_ONLY
+        }
     }
 
     private fun copyLogs(filtered: Boolean) {

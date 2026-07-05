@@ -123,6 +123,20 @@
             android:textColor="#E2E8F0"
             android:textSize="14sp" />
 
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="VPN mode"
+            android:textColor="#94A3B8" />
+
+        <Spinner
+            android:id="@+id/vpnModeSpinner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:backgroundTint="#38BDF8" />
+
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

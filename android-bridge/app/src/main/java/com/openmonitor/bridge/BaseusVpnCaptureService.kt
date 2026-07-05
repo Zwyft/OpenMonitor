@@ -23,6 +23,8 @@ class BaseusVpnCaptureService : VpnService() {
     private var worker: Thread? = null
     @Volatile
     private var targetIp: String = DEFAULT_TARGET_IP
+    @Volatile
+    private var captureMode: VpnCaptureMode = VpnCaptureMode.DNS_ONLY
 
     override fun onCreate() {
         super.onCreate()
@@ -31,6 +33,7 @@ class BaseusVpnCaptureService : VpnService() {
 
     override fun onStartCommand(intent: android.content.Intent?, flags: Int, startId: Int): Int {
         targetIp = intent?.getStringExtra(EXTRA_TARGET_IP).orEmpty().ifBlank { DEFAULT_TARGET_IP }
+        captureMode = VpnCaptureMode.fromValue(intent?.getStringExtra(EXTRA_CAPTURE_MODE))
         when (intent?.action) {
             ACTION_STOP -> stopCapture()
             else -> startCapture()
@@ -64,14 +67,23 @@ class BaseusVpnCaptureService : VpnService() {
                     .setSession("OpenMonitor Baseus capture")
                     .setMtu(1500)
                     .addAddress("10.0.0.2", 32)
-                    .addRoute("0.0.0.0", 0)
-                    .addRoute("::", 0)
                     .addDnsServer("1.1.1.1")
 
                 runCatching {
                     builder.addAllowedApplication(targetPackage())
                 }.onFailure { exception ->
                     throw IllegalStateException("Baseus app package not found: ${exception.message ?: "unknown"}")
+                }
+
+                when (captureMode) {
+                    VpnCaptureMode.DNS_ONLY -> {
+                        builder.addRoute("1.1.1.1", 32)
+                        builder.addRoute("8.8.8.8", 32)
+                    }
+                    VpnCaptureMode.DEEP -> {
+                        builder.addRoute("0.0.0.0", 0)
+                        builder.addRoute("::", 0)
+                    }
                 }
 
                 establishAndCapture(builder)
@@ -88,7 +100,12 @@ class BaseusVpnCaptureService : VpnService() {
         val fd = builder.establish() ?: throw IllegalStateException("VPN establish returned null")
         tunInterface = fd
         updateState(true, "VPN capture running for ${targetPackage()} → $targetIp")
-        BridgeLogStore.info("VPN capture established for ${targetPackage()} → $targetIp")
+        BridgeLogStore.info("VPN capture established for ${targetPackage()} → $targetIp mode=${captureMode.value}")
+        if (captureMode == VpnCaptureMode.DNS_ONLY) {
+            BridgeLogStore.info("VPN capture is in DNS-only mode and should preserve camera connectivity")
+        } else {
+            BridgeLogStore.warn("VPN capture is in deep mode and may break camera connectivity")
+        }
 
         FileInputStream(fd.fileDescriptor).use { input ->
             val buffer = ByteArray(32767)
@@ -445,11 +462,17 @@ class BaseusVpnCaptureService : VpnService() {
         private const val NOTIFICATION_ID = 2003
         private const val ACTION_STOP = "com.openmonitor.bridge.action.STOP_VPN_CAPTURE"
         private const val EXTRA_TARGET_IP = "extra_target_ip"
+        private const val EXTRA_CAPTURE_MODE = "extra_capture_mode"
         private const val DEFAULT_TARGET_IP = "192.168.4.25"
 
-        fun startIntent(context: android.content.Context, targetIp: String = DEFAULT_TARGET_IP): android.content.Intent {
+        fun startIntent(
+            context: android.content.Context,
+            targetIp: String = DEFAULT_TARGET_IP,
+            captureMode: VpnCaptureMode = VpnCaptureMode.DNS_ONLY,
+        ): android.content.Intent {
             return android.content.Intent(context, BaseusVpnCaptureService::class.java).apply {
                 putExtra(EXTRA_TARGET_IP, targetIp)
+                putExtra(EXTRA_CAPTURE_MODE, captureMode.value)
             }
         }
 
@@ -457,6 +480,17 @@ class BaseusVpnCaptureService : VpnService() {
             return android.content.Intent(context, BaseusVpnCaptureService::class.java).apply {
                 action = ACTION_STOP
             }
+        }
+    }
+}
+
+enum class VpnCaptureMode(val value: String, val displayName: String) {
+    DNS_ONLY("dns_only", "DNS only (safe)"),
+    DEEP("deep", "Deep capture (may break stream)");
+
+    companion object {
+        fun fromValue(value: String?): VpnCaptureMode {
+            return entries.firstOrNull { it.value == value } ?: DNS_ONLY
         }
     }
 }

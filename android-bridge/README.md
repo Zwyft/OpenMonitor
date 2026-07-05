@@ -26,7 +26,8 @@ This is a phone-hosted RTSP-to-HLS bridge app.
 - Capture mode aggressively probes the camera itself for Baseus/VicoHome-style HTTP and RTSP endpoints and logs every candidate it finds.
 - For app traffic capture, start proxy capture, then set the phone's Wi‑Fi proxy to `127.0.0.1:18481` before opening the Baseus app.
 - The proxy logs hostnames and request targets; HTTPS bodies still depend on whether the app honors a local proxy and trusts a user CA.
-- If the app ignores the proxy, start VPN capture instead. It logs DNS and TCP/UDP destinations for the Baseus app package `com.baseus.security.ipc`.
+- If the app ignores the proxy, start VPN capture instead. Use `DNS only (safe)` if you want to keep the app connected; use `Deep capture` only when you are willing to interrupt traffic for more aggressive logging.
+- VPN capture logs DNS and TCP/UDP destinations for the Baseus app package `com.baseus.security.ipc`.
 - Use the `Log filter` spinner and `Search` field in the phone app to narrow the log view.
 - Tap `Copy filtered logs` or `Copy full logs` in the phone app to put the log text on the clipboard so you can paste it here.
 - If you still want a file export, open `http://<phone-ip>:18480/api/logs.txt` in a browser, but the app copy buttons are the reliable path when the web page is unavailable.
@@ -51,6 +52,7 @@ This is a phone-hosted RTSP-to-HLS bridge app.
 - If Baseus capture mode still finds nothing, the camera may be exposing only a hub/cloud relay path or a vendor-locked stream that needs traffic capture from the phone app itself.
 - If the Baseus app ignores the proxy or pins TLS, we will need a VPN capture path next.
 - If VPN capture shows only local IPs or nothing useful, the app may be using certificate pinning, QUIC, or another backend path that needs deeper inspection.
+- If VPN capture disconnects the camera, switch the mode to `DNS only (safe)`; `Deep capture` intentionally intercepts more traffic and can interrupt the app.
 - If you need the logs after a crash, download `openmonitor-bridge.log` from the phone-hosted server before restarting the app.
 - If you need the logs after a crash and the page does not load, use `Copy full logs` in the app before restarting it.
 - If Vicohome sync fails with `account not registered`, switch the region picker from `Auto` to `US` or `EU` and retry.
