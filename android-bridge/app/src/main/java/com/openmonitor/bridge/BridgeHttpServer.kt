@@ -316,7 +316,7 @@ class BridgeHttpServer(
         val session = VicohomeSessionStore.snapshot()
         return when {
             session == null -> 409
-            extractQueryParam(query, "serial").isBlank() -> 400
+            resolveLiveTarget(query).isBlank() -> 400
             else -> 200
         }
     }
@@ -324,9 +324,9 @@ class BridgeHttpServer(
     private fun liveTicketJson(query: String): String {
         val session = VicohomeSessionStore.snapshot()
             ?: return errorJson("Baseus cloud session not loaded yet. Run Vicohome sync first.")
-        val serial = extractQueryParam(query, "serial")
+        val serial = resolveLiveTarget(query)
         if (serial.isBlank()) {
-            return errorJson("Missing serial parameter.")
+            return errorJson("Missing serial or ip parameter.")
         }
         return try {
             val ticket = VicohomeClient("", "").fetchLiveTicket(session, serial)
@@ -345,6 +345,32 @@ class BridgeHttpServer(
             BridgeLogStore.error("Live ticket request failed: ${exception.stackTraceToString()}")
             errorJson(exception.message ?: "Live ticket request failed")
         }
+    }
+
+    private fun resolveLiveTarget(query: String): String {
+        val requestedSerial = extractQueryParam(query, "serial")
+        if (requestedSerial.isNotBlank()) {
+            val devices = VicohomeDataStore.snapshotDevices()
+            val serialMatch = devices.firstOrNull { it.serialNumber.equals(requestedSerial, ignoreCase = true) }
+            if (serialMatch != null) {
+                return serialMatch.serialNumber
+            }
+            val ipMatch = devices.firstOrNull { it.ip.equals(requestedSerial, ignoreCase = true) }
+            if (ipMatch != null) {
+                return ipMatch.serialNumber
+            }
+            return requestedSerial
+        }
+        val requestedIp = extractQueryParam(query, "ip")
+        if (requestedIp.isNotBlank()) {
+            val devices = VicohomeDataStore.snapshotDevices()
+            val ipMatch = devices.firstOrNull { it.ip.equals(requestedIp, ignoreCase = true) }
+            if (ipMatch != null) {
+                return ipMatch.serialNumber
+            }
+            return requestedIp
+        }
+        return ""
     }
 
     private fun camerasListHtml(): String {

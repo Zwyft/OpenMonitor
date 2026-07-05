@@ -509,13 +509,21 @@ fun baseusCloudLivePage(serverUrl: String): String {
                 log("Select a camera first");
                 return;
               }
+              var manualIp = manualTargetInput.value.trim();
+              if (manualIp && manualIp === serial && serial.indexOf(".") === -1) {
+                manualIp = "";
+              }
               stopLive();
               setControlsRunning(true);
               currentSerial = serial;
               currentTicket = null;
               sessionId = "Browser-" + Date.now();
               log("Requesting cloud live ticket for " + serial);
-              requestJSON("GET", "/api/vicohome/live-ticket?serial=" + encodeURIComponent(serial), null, function (error, response) {
+              var ticketUrl = "/api/vicohome/live-ticket?serial=" + encodeURIComponent(serial);
+              if (manualIp) {
+                ticketUrl += "&ip=" + encodeURIComponent(manualIp);
+              }
+              requestJSON("GET", ticketUrl, null, function (error, response) {
                 if (error) {
                   log("Live ticket error: " + error.message);
                   setControlsRunning(false);
