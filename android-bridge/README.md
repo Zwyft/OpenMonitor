@@ -5,7 +5,7 @@ This is a phone-hosted RTSP-to-HLS bridge app.
 ## What it does
 - Runs a foreground service on the Android phone.
 - Accepts an RTSP stream URL.
-- Uses FFmpegKit to convert RTSP into HLS in app cache.
+- Uses LibVLC to convert RTSP into HLS in app cache.
 - Serves the HLS playlist and segments over HTTP so another device can open them in a browser.
 
 ## What it does not do yet

@@ -10,7 +10,6 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
-import com.arthenica.ffmpegkit.FFmpegKit
 
 class BridgeService : Service() {
     private lateinit var httpServer: BridgeHttpServer
@@ -18,7 +17,7 @@ class BridgeService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        rtspBridge = RtspHlsBridge(cacheDir)
+        rtspBridge = RtspHlsBridge(this, cacheDir)
         httpServer = BridgeHttpServer(cacheDir)
         httpServer.start()
         startAsForeground("OpenMonitor Bridge ready")
@@ -42,7 +41,7 @@ class BridgeService : Service() {
                 }
             }
             ACTION_STOP -> {
-                FFmpegKit.cancel()
+                rtspBridge.stop()
                 stopSelf()
             }
         }
@@ -50,7 +49,7 @@ class BridgeService : Service() {
     }
 
     override fun onDestroy() {
-        FFmpegKit.cancel()
+        rtspBridge.stop()
         httpServer.stop()
         BridgeStateStore.update {
             it.copy(status = "idle", message = "Bridge stopped", playlistUrl = "", rtspUrl = "", bridgeId = "")
@@ -61,7 +60,7 @@ class BridgeService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     private fun startBridge(rtspUrl: String) {
-        FFmpegKit.cancel()
+        rtspBridge.stop()
         val launch = rtspBridge.start(rtspUrl) { state ->
             BridgeStateStore.update { current ->
                 current.copy(
@@ -81,7 +80,7 @@ class BridgeService : Service() {
                 playlistUrl = launch.playlistUrl,
                 serverUrl = httpServer.baseUrl(),
                 status = "starting",
-                message = "Launching FFmpeg bridge",
+                message = "Launching LibVLC bridge",
             )
         }
         startAsForeground("Bridging RTSP stream")

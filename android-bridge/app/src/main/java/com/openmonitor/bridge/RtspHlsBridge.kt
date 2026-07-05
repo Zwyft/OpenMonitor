@@ -1,7 +1,10 @@
 package com.openmonitor.bridge
 
-import com.arthenica.ffmpegkit.FFmpegKit
-import com.arthenica.ffmpegkit.ReturnCode
+import android.content.Context
+import android.net.Uri
+import org.videolan.libvlc.LibVLC
+import org.videolan.libvlc.Media
+import org.videolan.libvlc.MediaPlayer
 import java.io.File
 import java.security.MessageDigest
 import java.util.Locale
@@ -14,8 +17,19 @@ data class BridgeLaunch(
     val playlistUrl: String,
 )
 
-class RtspHlsBridge(private val cacheRoot: File) {
+class RtspHlsBridge(
+    private val context: Context,
+    private val cacheRoot: File,
+) {
+    @Volatile
+    private var libVlc: LibVLC? = null
+
+    @Volatile
+    private var mediaPlayer: MediaPlayer? = null
+
     fun start(rtspUrl: String, notifyState: (BridgeState) -> Unit): BridgeLaunch {
+        stop()
+
         val bridgeId = bridgeKeyFor(rtspUrl)
         val bridgeDir = File(cacheRoot, "hls/$bridgeId")
         if (bridgeDir.exists()) {
@@ -25,7 +39,9 @@ class RtspHlsBridge(private val cacheRoot: File) {
 
         val playlistFile = File(bridgeDir, "index.m3u8")
         val segmentPattern = File(bridgeDir, "segment-%05d.ts").absolutePath
-        val command = buildCommand(rtspUrl, playlistFile.absolutePath, segmentPattern)
+        val localIndexUrl = "segment-%05d.ts"
+        val sout = buildSout(playlistFile.absolutePath, segmentPattern, localIndexUrl)
+
         notifyState(
             BridgeState(
                 bridgeId = bridgeId,
@@ -37,27 +53,36 @@ class RtspHlsBridge(private val cacheRoot: File) {
         )
 
         thread(name = "RtspHlsBridge-$bridgeId", isDaemon = true) {
-            val session = FFmpegKit.execute(command)
-            val returnCode = session.returnCode
-            if (ReturnCode.isSuccess(returnCode)) {
-                notifyState(
-                    BridgeState(
-                        bridgeId = bridgeId,
-                        rtspUrl = rtspUrl,
-                        playlistUrl = "/hls/$bridgeId/index.m3u8",
-                        status = "running",
-                        message = "RTSP bridge stopped cleanly",
-                    ),
+            try {
+                val options = arrayListOf(
+                    "--quiet",
+                    "--no-video-title-show",
+                    "--no-audio-time-stretch",
+                    "--network-caching=1000",
+                    "--sout-keep",
                 )
-            } else {
-                val failureMessage = session.failStackTrace ?: session.output
+                val vlc = LibVLC(context, options)
+                val player = MediaPlayer(vlc)
+                libVlc = vlc
+                mediaPlayer = player
+
+                val media = Media(vlc, Uri.parse(rtspUrl))
+                media.setHWDecoderEnabled(true, false)
+                media.addOption(":sout=$sout")
+                media.addOption(":sout-all")
+                media.addOption(":no-sout-audio")
+
+                player.setMedia(media)
+                media.release()
+                player.play()
+            } catch (exception: Exception) {
                 notifyState(
                     BridgeState(
                         bridgeId = bridgeId,
                         rtspUrl = rtspUrl,
                         playlistUrl = "/hls/$bridgeId/index.m3u8",
                         status = "error",
-                        message = failureMessage.ifBlank { "Bridge failed" },
+                        message = exception.message ?: "Bridge failed to start",
                     ),
                 )
             }
@@ -75,7 +100,7 @@ class RtspHlsBridge(private val cacheRoot: File) {
                             message = "Bridge is live",
                         ),
                     )
-                    return@execute
+                    return@thread
                 }
                 TimeUnit.SECONDS.sleep(1)
             }
@@ -95,47 +120,29 @@ class RtspHlsBridge(private val cacheRoot: File) {
         return BridgeLaunch(bridgeId, playlistFile, "/hls/$bridgeId/index.m3u8")
     }
 
-    private fun buildCommand(rtspUrl: String, playlistPath: String, segmentPattern: String): String {
-        return listOf(
-            "-hide_banner",
-            "-loglevel",
-            "warning",
-            "-rtsp_transport",
-            "tcp",
-            "-i",
-            shellQuote(rtspUrl),
-            "-map",
-            "0:v:0",
-            "-map",
-            "0:a?",
-            "-c:v",
-            "copy",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "128k",
-            "-ar",
-            "44100",
-            "-f",
-            "hls",
-            "-hls_time",
-            "2",
-            "-hls_list_size",
-            "6",
-            "-hls_flags",
-            "delete_segments+append_list+omit_endlist+program_date_time",
-            "-hls_segment_filename",
-            shellQuote(segmentPattern),
-            shellQuote(playlistPath),
-        ).joinToString(" ")
+    fun stop() {
+        try {
+            mediaPlayer?.stop()
+        } catch (_: Exception) {
+        }
+        try {
+            mediaPlayer?.release()
+        } catch (_: Exception) {
+        }
+        try {
+            libVlc?.release()
+        } catch (_: Exception) {
+        }
+        mediaPlayer = null
+        libVlc = null
+    }
+
+    private fun buildSout(playlistPath: String, segmentPath: String, indexUrl: String): String {
+        return "#transcode{vcodec=h264,vb=900,acodec=mp4a,ab=128,channels=2,samplerate=44100}:std{access=livehttp{seglen=2,delsegs=true,numsegs=6,index=$playlistPath,index-url=$indexUrl},mux=ts{use-key-frames},dst=$segmentPath}"
     }
 
     private fun bridgeKeyFor(rtspUrl: String): String {
         val digest = MessageDigest.getInstance("SHA-256").digest(rtspUrl.toByteArray())
         return digest.take(10).joinToString("") { byte -> "%02x".format(Locale.US, byte) }
-    }
-
-    private fun shellQuote(value: String): String {
-        return "'${value.replace("'", "'\"'\"'")}'"
     }
 }
