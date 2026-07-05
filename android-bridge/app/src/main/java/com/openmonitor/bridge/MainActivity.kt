@@ -102,8 +102,8 @@ class MainActivity : AppCompatActivity() {
     private fun renderState() {
         val state = BridgeStateStore.snapshot()
         statusView.text = state.status + if (state.message.isBlank()) "" else " • ${state.message}"
-        serverView.text = state.serverUrl.ifBlank { NetworkUtils.serverUrl(8080) }
-        val serverUrl = state.serverUrl.ifBlank { NetworkUtils.serverUrl(8080) }
+        serverView.text = state.serverUrl.ifBlank { NetworkUtils.serverUrl(BridgeConfig.HTTP_PORT) }
+        val serverUrl = state.serverUrl.ifBlank { NetworkUtils.serverUrl(BridgeConfig.HTTP_PORT) }
         hlsView.text = if (state.playlistUrl.isBlank()) "—" else "$serverUrl${state.playlistUrl}"
         bridgeIdView.text = state.bridgeId.ifBlank { "—" }
     }

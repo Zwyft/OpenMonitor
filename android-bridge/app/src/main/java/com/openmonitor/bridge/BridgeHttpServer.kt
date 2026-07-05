@@ -11,7 +11,7 @@ import kotlin.concurrent.thread
 
 class BridgeHttpServer(
     private val cacheRoot: File,
-    private val port: Int = 8080,
+    private val port: Int = BridgeConfig.HTTP_PORT,
 ) {
     private val running = AtomicBoolean(false)
     @Volatile
@@ -83,6 +83,7 @@ class BridgeHttpServer(
                 .card { max-width: 720px; margin: 0 auto; background: #111827; border: 1px solid #334155; border-radius: 18px; padding: 20px; }
                 code, input { width: 100%; box-sizing: border-box; }
                 code { display: block; padding: 12px; background: #0b1220; border-radius: 12px; overflow-x: auto; }
+                a { color: #7dd3fc; }
                 .muted { color: #94a3b8; }
               </style>
             </head>
@@ -94,7 +95,7 @@ class BridgeHttpServer(
                 <p>Status: <strong>${escapeHtml(state.status)}</strong></p>
                 <p>Message: ${escapeHtml(state.message)}</p>
                 <p>RTSP source: <code>${escapeHtml(state.rtspUrl.ifBlank { "none" })}</code></p>
-                <p>HLS: <code>${escapeHtml(if (state.playlistUrl.isBlank()) "none" else "$serverUrl${state.playlistUrl}")}</code></p>
+                <p>HLS: ${if (state.playlistUrl.isBlank()) "<code>none</code>" else """<a href="${escapeHtml("$serverUrl${state.playlistUrl}")}">${escapeHtml("$serverUrl${state.playlistUrl}")}</a>"""}</p>
                 <p class="muted">Use the Android app to start or stop the bridge. Open the HLS URL from another device on the same Wi‑Fi.</p>
               </div>
             </body>
