@@ -10,6 +10,7 @@ import android.os.ParcelFileDescriptor
 import android.content.pm.ServiceInfo
 import androidx.core.app.NotificationCompat
 import java.io.FileInputStream
+import java.net.InetAddress
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.atomic.AtomicBoolean
@@ -62,9 +63,9 @@ class BaseusVpnCaptureService : VpnService() {
                 val builder = Builder()
                     .setSession("OpenMonitor Baseus capture")
                     .setMtu(1500)
-                    .allowBypass()
                     .addAddress("10.0.0.2", 32)
-                    .addRoute(targetIp, 32)
+                    .addRoute("0.0.0.0", 0)
+                    .addRoute("::", 0)
                     .addDnsServer("1.1.1.1")
 
                 runCatching {
@@ -105,7 +106,13 @@ class BaseusVpnCaptureService : VpnService() {
         val captureTargetIp = targetIp
         if (length < 20) return
         val version = (packet[0].toInt() ushr 4) and 0x0F
-        if (version != 4) return
+        when (version) {
+            4 -> parseIpv4Packet(packet, length, captureTargetIp)
+            6 -> parseIpv6Packet(packet, length, captureTargetIp)
+        }
+    }
+
+    private fun parseIpv4Packet(packet: ByteArray, length: Int, captureTargetIp: String) {
         val ihl = (packet[0].toInt() and 0x0F) * 4
         if (length < ihl + 8) return
         val totalLength = readUnsignedShort(packet, 2)
@@ -119,15 +126,11 @@ class BaseusVpnCaptureService : VpnService() {
                 val sourcePort = readUnsignedShort(packet, ihl)
                 val destinationPort = readUnsignedShort(packet, ihl + 2)
                 val flags = packet[ihl + 13].toInt() and 0xFF
-                val syn = flags and 0x02 != 0
-                val ack = flags and 0x10 != 0
-                val fin = flags and 0x01 != 0
-                val rst = flags and 0x04 != 0
-                if ((sourceIp == captureTargetIp || destinationIp == captureTargetIp) && (syn || fin || rst || destinationPort == 443 || destinationPort == 554 || destinationPort == 8554 || sourcePort == 443 || sourcePort == 554 || sourcePort == 8554)) {
-                    val payloadLength = totalLength - ihl - (((packet[ihl + 12].toInt() ushr 4) and 0x0F) * 4)
-                    BridgeLogStore.info(
-                        "VPN TCP $sourceIp:$sourcePort -> $destinationIp:$destinationPort flags=${tcpFlags(flags)} payload=$payloadLength",
-                    )
+                val payloadLength = totalLength - ihl - (((packet[ihl + 12].toInt() ushr 4) and 0x0F) * 4)
+                BridgeLogStore.info(
+                    "VPN TCP $sourceIp:$sourcePort -> $destinationIp:$destinationPort flags=${tcpFlags(flags)} payload=$payloadLength",
+                )
+                if (sourceIp == captureTargetIp || destinationIp == captureTargetIp) {
                     BaseusVpnCaptureStateStore.update {
                         it.copy(message = "TCP $sourceIp:$sourcePort -> $destinationIp:$destinationPort", targetIp = captureTargetIp)
                     }
@@ -137,13 +140,50 @@ class BaseusVpnCaptureService : VpnService() {
                 if (length < ihl + 8) return
                 val sourcePort = readUnsignedShort(packet, ihl)
                 val destinationPort = readUnsignedShort(packet, ihl + 2)
-                if ((sourceIp == captureTargetIp || destinationIp == captureTargetIp) && (sourcePort == 53 || destinationPort == 53 || sourcePort == 443 || destinationPort == 443 || sourcePort == 554 || destinationPort == 554 || sourcePort == 8554 || destinationPort == 8554)) {
-                    BridgeLogStore.info("VPN UDP $sourceIp:$sourcePort -> $destinationIp:$destinationPort length=$totalLength")
-                    if (sourcePort == 53 || destinationPort == 53) {
-                        parseDns(packet, ihl + 8, totalLength - ihl - 8, sourceIp, destinationIp)
-                    }
+                BridgeLogStore.info("VPN UDP $sourceIp:$sourcePort -> $destinationIp:$destinationPort length=$totalLength")
+                if (sourcePort == 53 || destinationPort == 53) {
+                    parseDns(packet, ihl + 8, totalLength - ihl - 8, sourceIp, destinationIp)
+                }
+                if (sourceIp == captureTargetIp || destinationIp == captureTargetIp) {
                     BaseusVpnCaptureStateStore.update {
                         it.copy(message = "UDP $sourceIp:$sourcePort -> $destinationIp:$destinationPort", targetIp = captureTargetIp)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun parseIpv6Packet(packet: ByteArray, length: Int, captureTargetIp: String) {
+        if (length < 40) return
+        val nextHeader = packet[6].toInt() and 0xFF
+        val sourceIp = ipv6(packet, 8)
+        val destinationIp = ipv6(packet, 24)
+        when (nextHeader) {
+            6 -> {
+                if (length < 60) return
+                val sourcePort = readUnsignedShort(packet, 40)
+                val destinationPort = readUnsignedShort(packet, 42)
+                val flags = packet[53].toInt() and 0xFF
+                BridgeLogStore.info(
+                    "VPN TCP6 $sourceIp:$sourcePort -> $destinationIp:$destinationPort flags=${tcpFlags(flags)}",
+                )
+                if (sourceIp == captureTargetIp || destinationIp == captureTargetIp) {
+                    BaseusVpnCaptureStateStore.update {
+                        it.copy(message = "TCP6 $sourceIp:$sourcePort -> $destinationIp:$destinationPort", targetIp = captureTargetIp)
+                    }
+                }
+            }
+            17 -> {
+                if (length < 48) return
+                val sourcePort = readUnsignedShort(packet, 40)
+                val destinationPort = readUnsignedShort(packet, 42)
+                BridgeLogStore.info("VPN UDP6 $sourceIp:$sourcePort -> $destinationIp:$destinationPort")
+                if (sourcePort == 53 || destinationPort == 53) {
+                    parseDns(packet, 48, length - 48, sourceIp, destinationIp)
+                }
+                if (sourceIp == captureTargetIp || destinationIp == captureTargetIp) {
+                    BaseusVpnCaptureStateStore.update {
+                        it.copy(message = "UDP6 $sourceIp:$sourcePort -> $destinationIp:$destinationPort", targetIp = captureTargetIp)
                     }
                 }
             }
@@ -220,6 +260,14 @@ class BaseusVpnCaptureService : VpnService() {
             packet[offset + 2].toInt() and 0xFF,
             packet[offset + 3].toInt() and 0xFF,
         ).joinToString(".")
+    }
+
+    private fun ipv6(packet: ByteArray, offset: Int): String {
+        return try {
+            InetAddress.getByAddress(packet.copyOfRange(offset, offset + 16)).hostAddress ?: "unknown"
+        } catch (_: Exception) {
+            "unknown"
+        }
     }
 
     private fun readUnsignedShort(packet: ByteArray, offset: Int): Int {
