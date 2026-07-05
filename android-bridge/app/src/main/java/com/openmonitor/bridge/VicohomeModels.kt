@@ -62,22 +62,49 @@ enum class VicohomeRegionChoice(
 data class VicohomeRegion(
     val label: String,
     val apiBase: String,
+    val apiBaseCandidates: List<String>,
+    val authBaseCandidates: List<String>,
     val webrtcApiBase: String,
+    val webrtcApiBaseCandidates: List<String>,
     val countryNo: String,
 )
 
 object VicohomeRegionCatalog {
     val us = VicohomeRegion(
         label = "US",
-        apiBase = "https://api-us.vicohome.io",
+        apiBase = "https://ipc-bu-us-gw.baseussecurity.com",
+        apiBaseCandidates = listOf(
+            "https://ipc-bu-us-gw.baseussecurity.com",
+            "https://api-us.vicohome.io",
+        ),
+        authBaseCandidates = listOf(
+            "https://baseus-us-auth-gw.baseussecurity.com",
+            "https://api-us.vicohome.io",
+        ),
         webrtcApiBase = "https://api-us.vicoo.tech",
+        webrtcApiBaseCandidates = listOf(
+            "https://api-us.vicoo.tech",
+            "https://api-us.vicohome.io",
+        ),
         countryNo = "US",
     )
 
     val eu = VicohomeRegion(
         label = "EU",
-        apiBase = "https://api-eu.vicohome.io",
+        apiBase = "https://ipc-bu-eu-gw.baseussecurity.com",
+        apiBaseCandidates = listOf(
+            "https://ipc-bu-eu-gw.baseussecurity.com",
+            "https://api-eu.vicohome.io",
+        ),
+        authBaseCandidates = listOf(
+            "https://baseus-eu-auth-gw.baseussecurity.com",
+            "https://api-eu.vicohome.io",
+        ),
         webrtcApiBase = "https://api-eu.vicoo.tech",
+        webrtcApiBaseCandidates = listOf(
+            "https://api-eu.vicoo.tech",
+            "https://api-eu.vicohome.io",
+        ),
         countryNo = "EU",
     )
 

@@ -67,24 +67,32 @@ class VicohomeClient(
                     .put("appType", "iOS"),
             )
 
-        val response = postJson(
-            session.region.webrtcApiBase,
-            "/device/getWebrtcTicket",
-            payload,
-            session.token,
-            bearerToken = true,
-        )
-        val responseObject = JSONObject(response)
-        val resultCode = responseObject.optInt("result", -1)
-        if (resultCode != 0) {
-            val message = responseObject.optString("msg", "unknown error")
-            throw IllegalStateException("Live ticket request failed (${session.region.label}): $message")
+        var lastFailure: Exception? = null
+        for (baseUrl in session.region.webrtcApiBaseCandidates) {
+            try {
+                val response = postJson(
+                    baseUrl,
+                    "/device/getWebrtcTicket",
+                    payload,
+                    session.token,
+                    bearerToken = true,
+                )
+                val responseObject = JSONObject(response)
+                val resultCode = responseObject.optInt("result", -1)
+                if (resultCode != 0) {
+                    val message = responseObject.optString("msg", "unknown error")
+                    throw IllegalStateException("Live ticket request failed (${session.region.label} @ $baseUrl): $message")
+                }
+                val data = responseObject.optJSONObject("data") ?: throw IllegalStateException("Live ticket response missing data")
+                val ticket = parseLiveTicket(data)
+                return ticket.copy(
+                    accessToken = ticket.accessToken.ifBlank { session.token },
+                )
+            } catch (exception: Exception) {
+                lastFailure = exception
+            }
         }
-        val data = responseObject.optJSONObject("data") ?: throw IllegalStateException("Live ticket response missing data")
-        val ticket = parseLiveTicket(data)
-        return ticket.copy(
-            accessToken = ticket.accessToken.ifBlank { session.token },
-        )
+        throw lastFailure ?: IllegalStateException("Live ticket request failed (${session.region.label})")
     }
 
     private fun generateRequestID(): String {
@@ -99,22 +107,30 @@ class VicohomeClient(
             .put("countryNo", region.countryNo)
             .put("language", "en")
 
-        val response = postJson(region.apiBase, "/account/login", payload)
-        val responseObject = JSONObject(response)
-        val resultCode = responseObject.optInt("result", -1)
-        if (resultCode != 0) {
-            val message = responseObject.optString("msg", "unknown error")
-            throw IllegalStateException("Login failed (${region.label}): $message")
-        }
+        var lastFailure: Exception? = null
+        for (baseUrl in region.authBaseCandidates) {
+            try {
+                val response = postJson(baseUrl, "/account/login", payload)
+                val responseObject = JSONObject(response)
+                val resultCode = responseObject.optInt("result", -1)
+                if (resultCode != 0) {
+                    val message = responseObject.optString("msg", "unknown error")
+                    throw IllegalStateException("Login failed (${region.label} @ $baseUrl): $message")
+                }
 
-        return responseObject
-            .optJSONObject("data")
-            ?.optJSONObject("token")
-            ?.optString("token")
-            .orEmpty()
-            .also { token ->
-                require(token.isNotBlank()) { "Login failed: token missing" }
+                return responseObject
+                    .optJSONObject("data")
+                    ?.optJSONObject("token")
+                    ?.optString("token")
+                    .orEmpty()
+                    .also { token ->
+                        require(token.isNotBlank()) { "Login failed: token missing" }
+                    }
+            } catch (exception: Exception) {
+                lastFailure = exception
             }
+        }
+        throw lastFailure ?: IllegalStateException("Login failed (${region.label})")
     }
 
     private fun listDevices(token: String, region: VicohomeRegion): List<VicohomeDevice> {
@@ -122,41 +138,49 @@ class VicohomeClient(
             .put("language", "en")
             .put("countryNo", region.countryNo)
 
-        val response = postJson(
-            region.apiBase,
-            "/device/listuserdevices",
-            payload,
-            token,
-        )
-        val responseObject = JSONObject(response)
-        if (responseObject.optInt("code", 0) != 0 && responseObject.optInt("result", 0) != 0) {
-            return emptyList()
-        }
+        var lastFailure: Exception? = null
+        for (baseUrl in region.apiBaseCandidates) {
+            try {
+                val response = postJson(
+                    baseUrl,
+                    "/device/listuserdevices",
+                    payload,
+                    token,
+                )
+                val responseObject = JSONObject(response)
+                if (responseObject.optInt("code", 0) != 0 && responseObject.optInt("result", 0) != 0) {
+                    return emptyList()
+                }
 
-        val list = responseObject
-            .optJSONObject("data")
-            ?.optJSONArray("list")
-            ?: return emptyList()
+                val list = responseObject
+                    .optJSONObject("data")
+                    ?.optJSONArray("list")
+                    ?: return emptyList()
 
-        val devices = mutableListOf<VicohomeDevice>()
-        for (index in 0 until list.length()) {
-            val device = list.optJSONObject(index) ?: continue
-            devices += VicohomeDevice(
-                serialNumber = device.optString("serialNumber"),
-                modelNo = device.optString("modelNo"),
-                deviceName = device.optString("deviceName"),
-                networkName = device.optString("networkName"),
-                ip = device.optString("ip"),
-                batteryLevel = device.optInt("batteryLevel"),
-                locationName = device.optString("locationName"),
-                signalStrength = device.optInt("signalStrength"),
-                wifiChannel = device.optInt("wifiChannel"),
-                isCharging = device.optInt("isCharging"),
-                chargingMode = device.optInt("chargingMode"),
-                macAddress = device.optString("macAddress"),
-            )
+                val devices = mutableListOf<VicohomeDevice>()
+                for (index in 0 until list.length()) {
+                    val device = list.optJSONObject(index) ?: continue
+                    devices += VicohomeDevice(
+                        serialNumber = device.optString("serialNumber"),
+                        modelNo = device.optString("modelNo"),
+                        deviceName = device.optString("deviceName"),
+                        networkName = device.optString("networkName"),
+                        ip = device.optString("ip"),
+                        batteryLevel = device.optInt("batteryLevel"),
+                        locationName = device.optString("locationName"),
+                        signalStrength = device.optInt("signalStrength"),
+                        wifiChannel = device.optInt("wifiChannel"),
+                        isCharging = device.optInt("isCharging"),
+                        chargingMode = device.optInt("chargingMode"),
+                        macAddress = device.optString("macAddress"),
+                    )
+                }
+                return devices
+            } catch (exception: Exception) {
+                lastFailure = exception
+            }
         }
-        return devices
+        throw lastFailure ?: IllegalStateException("Device list request failed (${region.label})")
     }
 
     private fun listRecentEvents(token: String, region: VicohomeRegion): List<VicohomeEvent> {
@@ -168,41 +192,49 @@ class VicohomeClient(
             .put("language", "en")
             .put("countryNo", region.countryNo)
 
-        val response = postJson(
-            region.apiBase,
-            "/library/newselectlibrary",
-            payload,
-            token,
-        )
-        val responseObject = JSONObject(response)
-        if (responseObject.optInt("code", 0) != 0 && responseObject.optInt("result", 0) != 0) {
-            return emptyList()
-        }
+        var lastFailure: Exception? = null
+        for (baseUrl in region.apiBaseCandidates) {
+            try {
+                val response = postJson(
+                    baseUrl,
+                    "/library/newselectlibrary",
+                    payload,
+                    token,
+                )
+                val responseObject = JSONObject(response)
+                if (responseObject.optInt("code", 0) != 0 && responseObject.optInt("result", 0) != 0) {
+                    return emptyList()
+                }
 
-        val list = responseObject
-            .optJSONObject("data")
-            ?.optJSONArray("list")
-            ?: return emptyList()
+                val list = responseObject
+                    .optJSONObject("data")
+                    ?.optJSONArray("list")
+                    ?: return emptyList()
 
-        val events = mutableListOf<VicohomeEvent>()
-        for (index in 0 until list.length()) {
-            val event = list.optJSONObject(index) ?: continue
-            events += VicohomeEvent(
-                traceId = event.optString("traceId"),
-                timestamp = normalizeTimestamp(event.opt("timestamp")),
-                deviceName = event.optString("deviceName"),
-                serialNumber = event.optString("serialNumber"),
-                adminName = event.optString("adminName"),
-                period = normalizePeriod(event.opt("period")),
-                birdName = event.optString("birdName").ifBlank { "Unidentified" },
-                birdLatin = event.optString("birdLatin"),
-                birdConfidence = event.optDouble("birdConfidence"),
-                keyShotUrl = event.optString("keyShotUrl"),
-                imageUrl = event.optString("imageUrl"),
-                videoUrl = event.optString("videoUrl"),
-            )
+                val events = mutableListOf<VicohomeEvent>()
+                for (index in 0 until list.length()) {
+                    val event = list.optJSONObject(index) ?: continue
+                    events += VicohomeEvent(
+                        traceId = event.optString("traceId"),
+                        timestamp = normalizeTimestamp(event.opt("timestamp")),
+                        deviceName = event.optString("deviceName"),
+                        serialNumber = event.optString("serialNumber"),
+                        adminName = event.optString("adminName"),
+                        period = normalizePeriod(event.opt("period")),
+                        birdName = event.optString("birdName").ifBlank { "Unidentified" },
+                        birdLatin = event.optString("birdLatin"),
+                        birdConfidence = event.optDouble("birdConfidence"),
+                        keyShotUrl = event.optString("keyShotUrl"),
+                        imageUrl = event.optString("imageUrl"),
+                        videoUrl = event.optString("videoUrl"),
+                    )
+                }
+                return events
+            } catch (exception: Exception) {
+                lastFailure = exception
+            }
         }
-        return events
+        throw lastFailure ?: IllegalStateException("Event list request failed (${region.label})")
     }
 
     private fun postJson(
