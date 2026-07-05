@@ -24,6 +24,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var statusView: TextView
     private lateinit var scanStatusView: TextView
     private lateinit var baseusTargetsInput: EditText
+    private lateinit var proxyStatusView: TextView
     private lateinit var vicohomeEmailInput: EditText
     private lateinit var vicohomePasswordInput: EditText
     private lateinit var vicohomeRegionSpinner: Spinner
@@ -36,6 +37,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var passwordInput: EditText
     private lateinit var scanButton: Button
     private lateinit var captureButton: Button
+    private lateinit var proxyStartButton: Button
+    private lateinit var proxyStopButton: Button
     private lateinit var vicohomeButton: Button
     private lateinit var startButton: Button
     private lateinit var stopButton: Button
@@ -62,6 +65,7 @@ class MainActivity : AppCompatActivity() {
         statusView = findViewById(R.id.statusValue)
         scanStatusView = findViewById(R.id.scanStatusValue)
         baseusTargetsInput = findViewById(R.id.baseusTargetsInput)
+        proxyStatusView = findViewById(R.id.proxyStatusValue)
         vicohomeEmailInput = findViewById(R.id.vicohomeEmailInput)
         vicohomePasswordInput = findViewById(R.id.vicohomePasswordInput)
         vicohomeRegionSpinner = findViewById(R.id.vicohomeRegionSpinner)
@@ -75,12 +79,16 @@ class MainActivity : AppCompatActivity() {
         passwordInput = findViewById(R.id.passwordInput)
         scanButton = findViewById(R.id.scanButton)
         captureButton = findViewById(R.id.captureButton)
+        proxyStartButton = findViewById(R.id.proxyStartButton)
+        proxyStopButton = findViewById(R.id.proxyStopButton)
         vicohomeButton = findViewById(R.id.vicohomeButton)
         startButton = findViewById(R.id.startButton)
         stopButton = findViewById(R.id.stopButton)
 
         scanButton.setOnClickListener { scanCameras() }
         captureButton.setOnClickListener { captureBaseus() }
+        proxyStartButton.setOnClickListener { startProxyCapture() }
+        proxyStopButton.setOnClickListener { stopProxyCapture() }
         vicohomeButton.setOnClickListener { syncVicohome() }
         startButton.setOnClickListener { startBridge() }
         stopButton.setOnClickListener { stopBridge() }
@@ -204,6 +212,21 @@ class MainActivity : AppCompatActivity() {
         }.start()
     }
 
+    private fun startProxyCapture() {
+        scanStatusView.text = "Starting Baseus proxy capture..."
+        BridgeLogStore.info("Baseus proxy capture requested")
+        ContextCompat.startForegroundService(this, BaseusProxyService.startIntent(this))
+    }
+
+    private fun stopProxyCapture() {
+        BridgeLogStore.info("Baseus proxy capture stop requested")
+        startService(BaseusProxyService.stopIntent(this))
+        ProxyCaptureStateStore.update {
+            it.copy(running = false, message = "Proxy capture stopped")
+        }
+        renderState()
+    }
+
     private fun syncVicohome() {
         vicohomeButton.isEnabled = false
         val email = vicohomeEmailInput.text?.toString().orEmpty().trim()
@@ -270,6 +293,7 @@ class MainActivity : AppCompatActivity() {
             .ifBlank { "No logs yet." }
         renderCameraCandidates()
         renderVicohomeEntries()
+        renderProxyCapture()
     }
 
     private fun renderCameraCandidates() {
@@ -357,5 +381,20 @@ class MainActivity : AppCompatActivity() {
                 setTextColor(0xFF94A3B8.toInt())
             })
         }
+    }
+
+    private fun renderProxyCapture() {
+        val state = ProxyCaptureStateStore.snapshot()
+        proxyStatusView.text = buildString {
+            append(if (state.running) "Running" else "Stopped")
+            append(" • ")
+            append(state.message)
+            append("\n")
+            append("Set the Android phone Wi‑Fi proxy to 127.0.0.1:")
+            append(state.port)
+            append(" before opening the Baseus app.")
+        }
+        proxyStartButton.isEnabled = !state.running
+        proxyStopButton.isEnabled = state.running
     }
 }

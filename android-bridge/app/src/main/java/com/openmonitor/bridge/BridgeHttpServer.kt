@@ -108,6 +108,10 @@ class BridgeHttpServer(
                 <div style="background:#0b1220; border-radius:12px; padding:12px; max-height:320px; overflow:auto;">
                   ${vicohomeListHtml()}
                 </div>
+                <h2>Baseus proxy capture</h2>
+                <div style="background:#0b1220; border-radius:12px; padding:12px; max-height:180px; overflow:auto;">
+                  ${proxyCaptureHtml()}
+                </div>
                 <h2>Logs</h2>
                 <pre style="white-space: pre-wrap; word-break: break-word; background:#0b1220; border-radius:12px; padding:12px; max-height:320px; overflow:auto;">${escapeHtml(logsText(40))}</pre>
                 <p class="muted">Use the Android app to start or stop the bridge. Open the HLS URL from another device on the same Wi‑Fi.</p>
@@ -417,6 +421,22 @@ class BridgeHttpServer(
                 append("\"}")
             }
             append("]}")
+        }
+    }
+
+    private fun proxyCaptureHtml(): String {
+        val state = ProxyCaptureStateStore.snapshot()
+        return buildString {
+            append("<div><strong>")
+            append(if (state.running) "Running" else "Stopped")
+            append("</strong> — ")
+            append(escapeHtml(state.message))
+            append("</div>")
+            append("<div class=\"muted\">")
+            append("Set the Android phone Wi‑Fi proxy to <code>127.0.0.1:")
+            append(state.port)
+            append("</code> before launching the Baseus app.")
+            append("</div>")
         }
     }
 }
