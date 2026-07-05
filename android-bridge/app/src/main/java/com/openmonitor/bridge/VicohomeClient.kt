@@ -10,6 +10,9 @@ import java.security.MessageDigest
 import java.util.Locale
 import java.util.UUID
 
+private const val BASEUS_APP_VERSION_NAME = "1.0"
+private const val BASEUS_APP_VERSION_CODE = "1"
+
 class VicohomeClient(
     private val email: String,
     private val password: String,
@@ -324,8 +327,8 @@ class VicohomeClient(
         connection.setRequestProperty("brand", sanitizeHeaderValue(android.os.Build.BRAND))
         connection.setRequestProperty("model", sanitizeHeaderValue(android.os.Build.MODEL))
         connection.setRequestProperty("appLang", "en")
-        connection.setRequestProperty("appVersion", BuildConfig.VERSION_NAME)
-        connection.setRequestProperty("versionCode", BuildConfig.VERSION_CODE.toString())
+        connection.setRequestProperty("appVersion", BASEUS_APP_VERSION_NAME)
+        connection.setRequestProperty("versionCode", BASEUS_APP_VERSION_CODE)
         connection.setRequestProperty("channel", "")
         connection.setRequestProperty("region", region.shortName)
         connection.setRequestProperty("appType", "40")
