@@ -31,6 +31,9 @@ This is a phone-hosted RTSP-to-HLS bridge app.
 - VPN capture logs DNS and TCP/UDP destinations for the Baseus app package `com.baseus.security.ipc`.
 - Use the `Log filter` spinner and `Search` field in the phone app to narrow the log view.
 - Tap `Copy filtered logs` or `Copy full logs` in the phone app to put the log text on the clipboard so you can paste it here.
+- Use `Probe Baseus prefs` if the phone is rooted or if `run-as` works; it tries to read the Baseus app token cache from `com.baseus.security.ipc`.
+- Use `Copy token candidates` or the `Token candidates` log filter when you want only auth/session-looking values.
+- If you need a file export, open `http://<phone-ip>:18480/api/tokens.txt` in a browser.
 - If you still want a file export, open `http://<phone-ip>:18480/api/logs.txt` in a browser, but the app copy buttons are the reliable path when the web page is unavailable.
 - If local probing fails, enter your Vicohome account email/password, pick a region, and tap `Vicohome sync` to load cloud devices and recent clips.
 - Leave the region picker on `Auto (US then EU)` if you are not sure which backend your Baseus account uses.

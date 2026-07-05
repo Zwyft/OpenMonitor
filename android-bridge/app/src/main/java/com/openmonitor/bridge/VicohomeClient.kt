@@ -163,6 +163,8 @@ class VicohomeClient(
                     authToken = auth,
                     pwd = data.optString("pwd").orEmpty(),
                 )
+                TokenHarvestStore.record("Baseus auth", accountLogin.authToken, "account token")
+                TokenHarvestStore.recordFromText("Baseus auth response", response)
                 return accountLogin
             } catch (exception: Exception) {
                 lastFailure = exception
@@ -243,9 +245,12 @@ class VicohomeClient(
                     }
                     val token = extractXmAccessToken(responseObject)
                     if (token.isNotBlank()) {
+                        TokenHarvestStore.record("Baseus XM session", token, "XM token")
+                        TokenHarvestStore.recordFromText("Baseus XM session response", response)
                         onProgress("Baseus XM session token acquired from $baseUrl")
                         return token
                     }
+                    TokenHarvestStore.recordFromText("Baseus XM session response", response)
                     throw IllegalStateException("XM session login returned no access token: ${response.take(240)}")
                 } catch (exception: Exception) {
                     lastFailure = exception
@@ -281,6 +286,7 @@ class VicohomeClient(
                         throw IllegalStateException("Device list request failed (${region.label} @ $baseUrl): $message")
                     }
 
+                    TokenHarvestStore.recordFromText("Baseus device list response", response)
                     sawSuccessfulResponse = true
                     val devices = parseDeviceList(responseObject)
                     if (devices.isNotEmpty()) {
@@ -346,7 +352,9 @@ class VicohomeClient(
             } else {
                 connection.errorStream
             } ?: throw IllegalStateException("Vicohome request failed with HTTP ${connection.responseCode}")
-            readAll(responseStream)
+            val response = readAll(responseStream)
+            recordTokenArtifacts("XM action $action @ $baseUrl", connection.headerFields, response)
+            response
         } finally {
             connection.disconnect()
         }
@@ -508,7 +516,9 @@ class VicohomeClient(
             } else {
                 connection.errorStream
             } ?: throw IllegalStateException("Vicohome request failed with HTTP ${connection.responseCode}")
-            readAll(responseStream)
+            val response = readAll(responseStream)
+            recordTokenArtifacts("Baseus GET $path @ $baseUrl", connection.headerFields, response)
+            response
         } finally {
             connection.disconnect()
         }
@@ -608,10 +618,31 @@ class VicohomeClient(
             } else {
                 connection.errorStream
             } ?: throw IllegalStateException("Vicohome request failed with HTTP ${connection.responseCode}")
-            readAll(responseStream)
+            val response = readAll(responseStream)
+            recordTokenArtifacts("Baseus JSON $path @ $baseUrl", connection.headerFields, response)
+            response
         } finally {
             connection.disconnect()
         }
+    }
+
+    private fun recordTokenArtifacts(
+        source: String,
+        headers: Map<String, List<String>>?,
+        body: String,
+    ) {
+        headers?.forEach { (name, values) ->
+            val headerName = name.orEmpty()
+            if (headerName.isBlank()) return@forEach
+            val lowerName = headerName.lowercase(Locale.US)
+            if (lowerName.contains("token") || lowerName.contains("auth") || lowerName.contains("cookie") || lowerName.contains("authorization")) {
+                values.filter { it.isNotBlank() }.forEach { value ->
+                    TokenHarvestStore.record(source, value, "header=$headerName")
+                    TokenHarvestStore.recordFromText(source, value, "header=$headerName")
+                }
+            }
+        }
+        TokenHarvestStore.recordFromText(source, body)
     }
 
     private fun buildRequestUrl(baseUrl: String, path: String, queryParams: Map<String, String>): String {

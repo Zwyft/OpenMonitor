@@ -57,6 +57,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var startButton: Button
     private lateinit var stopButton: Button
     private lateinit var vicohomeContainer: LinearLayout
+    private lateinit var tokenHarvestStatusView: TextView
+    private lateinit var tokenHarvestValue: TextView
+    private lateinit var probeTokenPrefsButton: Button
+    private lateinit var copyTokenCandidatesButton: Button
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
@@ -95,6 +99,8 @@ class MainActivity : AppCompatActivity() {
         copyAllLogsButton = findViewById(R.id.copyAllLogsButton)
         cameraContainer = findViewById(R.id.cameraContainer)
         vicohomeContainer = findViewById(R.id.vicohomeContainer)
+        tokenHarvestStatusView = findViewById(R.id.tokenHarvestStatusValue)
+        tokenHarvestValue = findViewById(R.id.tokenHarvestValue)
         usernameInput = findViewById(R.id.usernameInput)
         passwordInput = findViewById(R.id.passwordInput)
         scanButton = findViewById(R.id.scanButton)
@@ -104,6 +110,8 @@ class MainActivity : AppCompatActivity() {
         vpnStartButton = findViewById(R.id.vpnStartButton)
         vpnStopButton = findViewById(R.id.vpnStopButton)
         vicohomeButton = findViewById(R.id.vicohomeButton)
+        probeTokenPrefsButton = findViewById(R.id.probeTokenPrefsButton)
+        copyTokenCandidatesButton = findViewById(R.id.copyTokenCandidatesButton)
         startButton = findViewById(R.id.startButton)
         stopButton = findViewById(R.id.stopButton)
 
@@ -114,6 +122,8 @@ class MainActivity : AppCompatActivity() {
         vpnStartButton.setOnClickListener { startVpnCapture() }
         vpnStopButton.setOnClickListener { stopVpnCapture() }
         vicohomeButton.setOnClickListener { syncVicohome() }
+        probeTokenPrefsButton.setOnClickListener { probeBaseusPrefs() }
+        copyTokenCandidatesButton.setOnClickListener { copyTokenCandidates() }
         startButton.setOnClickListener { startBridge() }
         stopButton.setOnClickListener { stopBridge() }
         copyFilteredLogsButton.setOnClickListener { copyLogs(filtered = true) }
@@ -393,6 +403,7 @@ class MainActivity : AppCompatActivity() {
         renderLogs()
         renderCameraCandidates()
         renderVicohomeEntries()
+        renderTokenHarvest()
         renderProxyCapture()
         renderVpnCapture()
     }
@@ -513,6 +524,26 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun renderTokenHarvest() {
+        tokenHarvestStatusView.text = TokenHarvestStore.summary()
+        val tokens = TokenHarvestStore.snapshot(20)
+        tokenHarvestValue.text = if (tokens.isEmpty()) {
+            "No token candidates yet."
+        } else {
+            tokens.joinToString("\n\n") { entry ->
+                buildString {
+                    append(entry.source)
+                    if (entry.note.isNotBlank()) {
+                        append(" • ")
+                        append(entry.note)
+                    }
+                    append('\n')
+                    append(entry.token)
+                }
+            }
+        }
+    }
+
     private fun renderProxyCapture() {
         val state = ProxyCaptureStateStore.snapshot()
         proxyStatusView.text = buildString {
@@ -589,5 +620,46 @@ class MainActivity : AppCompatActivity() {
         val summary = if (filtered) "${preset.displayName}${query.searchText.takeIf { it.isNotBlank() }?.let { " • $it" } ?: ""}" else "full log"
         Toast.makeText(this, "Copied $summary", Toast.LENGTH_SHORT).show()
         BridgeLogStore.info("Log copy requested ($summary)")
+    }
+
+    private fun copyTokenCandidates() {
+        val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+        val text = TokenHarvestStore.exportText(50)
+        clipboard.setPrimaryClip(ClipData.newPlainText("OpenMonitor token candidates", text))
+        Toast.makeText(this, "Copied token candidates", Toast.LENGTH_SHORT).show()
+        BridgeLogStore.info("Token candidates copied to clipboard")
+    }
+
+    private fun probeBaseusPrefs() {
+        probeTokenPrefsButton.isEnabled = false
+        tokenHarvestStatusView.text = "Probing Baseus app prefs..."
+        BridgeLogStore.info("Baseus prefs probe requested")
+        Thread {
+            try {
+                val tokens = BaseusTokenProbe.probe { progress ->
+                    BridgeLogStore.info(progress)
+                    runOnUiThread {
+                        tokenHarvestStatusView.text = progress
+                    }
+                }
+                runOnUiThread {
+                    tokenHarvestStatusView.text = if (tokens.isEmpty()) {
+                        "Baseus prefs probe complete: no readable tokens found"
+                    } else {
+                        "Baseus prefs probe complete: found ${tokens.size} candidate(s)"
+                    }
+                    renderTokenHarvest()
+                }
+            } catch (exception: Exception) {
+                BridgeLogStore.error("Baseus prefs probe failed: ${exception.stackTraceToString()}")
+                runOnUiThread {
+                    tokenHarvestStatusView.text = "Baseus prefs probe failed: ${exception.message ?: "unknown error"}"
+                }
+            } finally {
+                runOnUiThread {
+                    probeTokenPrefsButton.isEnabled = true
+                }
+            }
+        }.start()
     }
 }

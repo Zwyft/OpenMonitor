@@ -66,6 +66,8 @@ class BridgeHttpServer(
                 method == "GET" && path == "/api/state" -> respondText(output, 200, "application/json; charset=utf-8", BridgeStateStore.snapshot().toJson())
                 method == "GET" && path == "/api/logs" -> respondText(output, 200, "application/json; charset=utf-8", logsJson())
                 method == "GET" && path == "/api/logs.txt" -> respondDownload(output, "text/plain; charset=utf-8", "openmonitor-bridge.log", logsText(1000))
+                method == "GET" && path == "/api/tokens" -> respondText(output, 200, "application/json; charset=utf-8", tokensJson())
+                method == "GET" && path == "/api/tokens.txt" -> respondDownload(output, "text/plain; charset=utf-8", "openmonitor-tokens.txt", tokensText(1000))
                 method == "GET" && path == "/api/vpn/state" -> respondText(output, 200, "application/json; charset=utf-8", vpnStateJson())
                 method == "GET" && path == "/api/vicohome/session" -> respondText(output, 200, "application/json; charset=utf-8", vicohomeSessionJson())
                 method == "GET" && path == "/api/cameras" -> respondText(output, 200, "application/json; charset=utf-8", camerasJson())
@@ -115,6 +117,10 @@ class BridgeHttpServer(
                   ${vicohomeListHtml(serverUrl)}
                 </div>
                 <p><a href="${escapeHtml("$serverUrl/live")}">Open Baseus cloud live viewer</a></p>
+                <h2>Token harvest</h2>
+                <div style="background:#0b1220; border-radius:12px; padding:12px; max-height:220px; overflow:auto;">
+                  ${tokenHarvestHtml(serverUrl)}
+                </div>
                 <h2>Baseus proxy capture</h2>
                 <div style="background:#0b1220; border-radius:12px; padding:12px; max-height:180px; overflow:auto;">
                   ${proxyCaptureHtml()}
@@ -126,6 +132,7 @@ class BridgeHttpServer(
                 <h2>Logs</h2>
                 <pre style="white-space: pre-wrap; word-break: break-word; background:#0b1220; border-radius:12px; padding:12px; max-height:320px; overflow:auto;">${escapeHtml(logsText(40))}</pre>
                 <p><a href="${escapeHtml("$serverUrl/api/logs.txt")}">Download full log file</a></p>
+                <p><a href="${escapeHtml("$serverUrl/api/tokens.txt")}">Download token candidates</a></p>
                 <p class="muted">Use the Android app to start or stop the bridge. Open the HLS URL for RTSP streams or the /live page for Baseus cloud live video from another device on the same Wi‑Fi.</p>
               </div>
             </body>
@@ -261,6 +268,30 @@ class BridgeHttpServer(
                 append(entry.level.jsonEscape())
                 append("\",\"message\":\"")
                 append(entry.message.jsonEscape())
+                append("\"}")
+            }
+            append("]}")
+        }
+    }
+
+    private fun tokensJson(): String {
+        val tokens = TokenHarvestStore.snapshot()
+        return buildString {
+            append('{')
+            append("\"message\":\"")
+            append(TokenHarvestStore.summary().jsonEscape())
+            append("\",\"entries\":[")
+            tokens.forEachIndexed { index, entry ->
+                if (index > 0) append(',')
+                append('{')
+                append("\"timestampMillis\":")
+                append(entry.timestampMillis)
+                append(",\"source\":\"")
+                append(entry.source.jsonEscape())
+                append("\",\"token\":\"")
+                append(entry.token.jsonEscape())
+                append("\",\"note\":\"")
+                append(entry.note.jsonEscape())
                 append("\"}")
             }
             append("]}")
@@ -586,6 +617,43 @@ class BridgeHttpServer(
                 append("\"}")
             }
             append("]}")
+        }
+    }
+
+    private fun tokensText(limit: Int): String {
+        return TokenHarvestStore.exportText(limit)
+    }
+
+    private fun tokenHarvestHtml(serverUrl: String): String {
+        val tokens = TokenHarvestStore.snapshot(20)
+        return buildString {
+            append("<div class=\"muted\">")
+            append(escapeHtml(TokenHarvestStore.summary()))
+            append("</div>")
+            append("<p><a href=\"")
+            append(escapeHtml("$serverUrl/api/tokens.txt"))
+            append("\">Download token candidates</a></p>")
+            if (tokens.isEmpty()) {
+                append("<div class=\"muted\">No token candidates yet.</div>")
+            } else {
+                append("<ul style=\"margin:0; padding-left:20px;\">")
+                tokens.forEach { entry ->
+                    append("<li style=\"margin-bottom:8px;\">")
+                    append("<div><strong>")
+                    append(escapeHtml(entry.source))
+                    append("</strong>")
+                    if (entry.note.isNotBlank()) {
+                        append(" — ")
+                        append(escapeHtml(entry.note))
+                    }
+                    append("</div>")
+                    append("<div><code>")
+                    append(escapeHtml(entry.token))
+                    append("</code></div>")
+                    append("</li>")
+                }
+                append("</ul>")
+            }
         }
     }
 

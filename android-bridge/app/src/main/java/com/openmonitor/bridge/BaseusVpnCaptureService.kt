@@ -237,6 +237,18 @@ class BaseusVpnCaptureService : VpnService() {
             if (text.startsWith("GET ") || text.startsWith("POST ") || text.startsWith("PUT ") || text.startsWith("DELETE ")) {
                 val firstLine = text.lineSequence().firstOrNull().orEmpty()
                 BridgeLogStore.info("VPN HTTP $sourceIp:$sourcePort -> $destinationIp:$destinationPort request=$firstLine")
+                TokenHarvestStore.recordFromText("VPN HTTP $sourceIp:$sourcePort -> $destinationIp:$destinationPort", text)
+                return
+            }
+            if (text.contains("Authorization:", ignoreCase = true) || text.contains("Cookie:", ignoreCase = true) || text.contains("token", ignoreCase = true)) {
+                BridgeLogStore.info("VPN HTTP $sourceIp:$sourcePort -> $destinationIp:$destinationPort text=${text.lineSequence().firstOrNull().orEmpty()}")
+                TokenHarvestStore.recordFromText("VPN HTTP $sourceIp:$sourcePort -> $destinationIp:$destinationPort", text)
+            }
+        }
+        if (captureMode == VpnCaptureMode.DEEP) {
+            val text = runCatching { String(packet, offset, minOf(length, 256), Charsets.UTF_8) }.getOrNull().orEmpty()
+            if (text.contains("token", ignoreCase = true) || text.contains("auth", ignoreCase = true) || text.contains("bearer", ignoreCase = true)) {
+                TokenHarvestStore.recordFromText("VPN payload $sourceIp:$sourcePort -> $destinationIp:$destinationPort", text)
             }
         }
     }
@@ -289,6 +301,7 @@ class BaseusVpnCaptureService : VpnService() {
                     if (nameType == 0x00) {
                         val serverName = String(packet, listCursor, nameLength, Charsets.UTF_8)
                         BridgeLogStore.info("VPN TLS SNI $sourceIp:$sourcePort -> $destinationIp:$destinationPort host=$serverName")
+                        TokenHarvestStore.recordFromText("VPN TLS SNI $sourceIp:$sourcePort -> $destinationIp:$destinationPort", serverName)
                         BaseusVpnCaptureStateStore.update {
                             it.copy(message = "TLS SNI $serverName", targetIp = targetIp)
                         }

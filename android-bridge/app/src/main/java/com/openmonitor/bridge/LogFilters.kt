@@ -25,6 +25,7 @@ enum class LogFilterPreset(val displayName: String) {
     DNS("DNS"),
     HTTP("HTTP"),
     TCP_UDP("TCP / UDP"),
+    TOKENS("Token candidates"),
     HLS("HLS / bridge"),
     BASEUS("Baseus cloud"),
     SCAN("Scan / discovery"),
@@ -40,6 +41,7 @@ enum class LogFilterPreset(val displayName: String) {
             DNS -> message.contains("dns")
             HTTP -> message.contains("http") || message.contains("request=")
             TCP_UDP -> message.startsWith("vpn tcp ") || message.startsWith("vpn tcp6 ") || message.startsWith("vpn udp ") || message.startsWith("vpn udp6 ")
+            TOKENS -> message.contains("token") || message.contains("auth") || message.contains("bearer") || message.contains("xm session")
             HLS -> message.contains("hls") || message.contains("playlist") || message.contains("segment") || message.contains("bridge")
             BASEUS -> message.contains("baseus") || message.contains("vicohome") || message.contains("cloud")
             SCAN -> message.contains("scan") || message.contains("discover") || message.contains("candidate") || message.contains("onvif") || message.contains("rtsp")
