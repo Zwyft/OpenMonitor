@@ -63,6 +63,7 @@ class BridgeHttpServer(
                 method == "GET" && path == "/" -> respondText(output, 200, "text/html; charset=utf-8", rootPage())
                 method == "GET" && path == "/api/state" -> respondText(output, 200, "application/json; charset=utf-8", BridgeStateStore.snapshot().toJson())
                 method == "GET" && path == "/api/logs" -> respondText(output, 200, "application/json; charset=utf-8", logsJson())
+                method == "GET" && path == "/api/vpn/state" -> respondText(output, 200, "application/json; charset=utf-8", vpnStateJson())
                 method == "GET" && path == "/api/cameras" -> respondText(output, 200, "application/json; charset=utf-8", camerasJson())
                 method == "GET" && path == "/api/vicohome/devices" -> respondText(output, 200, "application/json; charset=utf-8", vicohomeDevicesJson())
                 method == "GET" && path == "/api/vicohome/events" -> respondText(output, 200, "application/json; charset=utf-8", vicohomeEventsJson())
@@ -111,6 +112,10 @@ class BridgeHttpServer(
                 <h2>Baseus proxy capture</h2>
                 <div style="background:#0b1220; border-radius:12px; padding:12px; max-height:180px; overflow:auto;">
                   ${proxyCaptureHtml()}
+                </div>
+                <h2>Baseus VPN capture</h2>
+                <div style="background:#0b1220; border-radius:12px; padding:12px; max-height:180px; overflow:auto;">
+                  ${vpnCaptureHtml(serverUrl)}
                 </div>
                 <h2>Logs</h2>
                 <pre style="white-space: pre-wrap; word-break: break-word; background:#0b1220; border-radius:12px; padding:12px; max-height:320px; overflow:auto;">${escapeHtml(logsText(40))}</pre>
@@ -227,6 +232,24 @@ class BridgeHttpServer(
                 append("\"}")
             }
             append("]}")
+        }
+    }
+
+    private fun vpnStateJson(): String {
+        val state = BaseusVpnCaptureStateStore.snapshot()
+        return buildString {
+            append('{')
+            append("\"running\":")
+            append(state.running)
+            append(",\"message\":\"")
+            append(state.message.jsonEscape())
+            append("\",\"packageName\":\"")
+            append(state.packageName.jsonEscape())
+            append("\",\"targetIp\":\"")
+            append(state.targetIp.jsonEscape())
+            append("\",\"updatedAtMillis\":")
+            append(state.updatedAtMillis)
+            append('}')
         }
     }
 
@@ -436,6 +459,33 @@ class BridgeHttpServer(
             append("Set the Android phone Wi‑Fi proxy to <code>127.0.0.1:")
             append(state.port)
             append("</code> before launching the Baseus app.")
+            append("</div>")
+        }
+    }
+
+    private fun vpnCaptureHtml(serverUrl: String): String {
+        val state = BaseusVpnCaptureStateStore.snapshot()
+        return buildString {
+            append("<div><strong>")
+            append(if (state.running) "Running" else "Stopped")
+            append("</strong> — ")
+            append(escapeHtml(state.message))
+            append("</div>")
+            append("<div class=\"muted\">")
+            append("VPN state: <code>")
+            append(escapeHtml("$serverUrl/api/vpn/state"))
+            append("</code><br>")
+            append("VPN logs: <code>")
+            append(escapeHtml("$serverUrl/api/logs"))
+            append("</code>")
+            append("</div>")
+            append("<div class=\"muted\">")
+            append("Target package: <code>")
+            append(escapeHtml(state.packageName))
+            append("</code><br>")
+            append("Target camera IP: <code>")
+            append(escapeHtml(state.targetIp))
+            append("</code>")
             append("</div>")
         }
     }
