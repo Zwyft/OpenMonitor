@@ -21,6 +21,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var rtspInput: EditText
     private lateinit var statusView: TextView
     private lateinit var scanStatusView: TextView
+    private lateinit var baseusTargetsInput: EditText
     private lateinit var serverView: TextView
     private lateinit var hlsView: TextView
     private lateinit var bridgeIdView: TextView
@@ -29,6 +30,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var usernameInput: EditText
     private lateinit var passwordInput: EditText
     private lateinit var scanButton: Button
+    private lateinit var captureButton: Button
     private lateinit var startButton: Button
     private lateinit var stopButton: Button
 
@@ -52,6 +54,7 @@ class MainActivity : AppCompatActivity() {
         rtspInput = findViewById(R.id.rtspInput)
         statusView = findViewById(R.id.statusValue)
         scanStatusView = findViewById(R.id.scanStatusValue)
+        baseusTargetsInput = findViewById(R.id.baseusTargetsInput)
         serverView = findViewById(R.id.serverValue)
         hlsView = findViewById(R.id.hlsValue)
         bridgeIdView = findViewById(R.id.bridgeIdValue)
@@ -60,10 +63,12 @@ class MainActivity : AppCompatActivity() {
         usernameInput = findViewById(R.id.usernameInput)
         passwordInput = findViewById(R.id.passwordInput)
         scanButton = findViewById(R.id.scanButton)
+        captureButton = findViewById(R.id.captureButton)
         startButton = findViewById(R.id.startButton)
         stopButton = findViewById(R.id.stopButton)
 
         scanButton.setOnClickListener { scanCameras() }
+        captureButton.setOnClickListener { captureBaseus() }
         startButton.setOnClickListener { startBridge() }
         stopButton.setOnClickListener { stopBridge() }
 
@@ -131,6 +136,48 @@ class MainActivity : AppCompatActivity() {
             } finally {
                 runOnUiThread {
                     scanButton.isEnabled = true
+                }
+            }
+        }.start()
+    }
+
+    private fun captureBaseus() {
+        captureButton.isEnabled = false
+        val targets = baseusTargetsInput.text?.toString().orEmpty()
+            .split(',', ';', ' ', '\n', '\t')
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+        scanStatusView.text = "Capturing Baseus endpoints..."
+        BridgeLogStore.info("Baseus capture requested for ${targets.joinToString(", ")}")
+        Thread {
+            try {
+                val scanner = CameraScanner(
+                    username = usernameInput.text?.toString().orEmpty().trim(),
+                    password = passwordInput.text?.toString().orEmpty().trim(),
+                )
+                val discoveries = scanner.captureBaseus(targets) { progress ->
+                    BridgeLogStore.info(progress)
+                    runOnUiThread {
+                        scanStatusView.text = progress
+                    }
+                }
+                CameraDiscoveryStore.update(discoveries)
+                runOnUiThread {
+                    scanStatusView.text = if (discoveries.isEmpty()) {
+                        "Baseus capture complete: no stream URIs found"
+                    } else {
+                        "Baseus capture complete: found ${discoveries.size} candidate(s)"
+                    }
+                    renderCameraCandidates()
+                }
+            } catch (exception: Exception) {
+                BridgeLogStore.error("Baseus capture failed: ${exception.stackTraceToString()}")
+                runOnUiThread {
+                    scanStatusView.text = "Baseus capture failed: ${exception.message ?: "unknown error"}"
+                }
+            } finally {
+                runOnUiThread {
+                    captureButton.isEnabled = true
                 }
             }
         }.start()

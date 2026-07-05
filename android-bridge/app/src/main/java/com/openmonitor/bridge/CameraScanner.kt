@@ -14,6 +14,11 @@ import java.util.UUID
 import java.util.concurrent.Callable
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import javax.net.ssl.HostnameVerifier
+import javax.net.ssl.HttpsURLConnection
+import javax.net.ssl.SSLContext
+import javax.net.ssl.TrustManager
+import javax.net.ssl.X509TrustManager
 import javax.xml.parsers.DocumentBuilderFactory
 import org.w3c.dom.Element
 
@@ -115,6 +120,24 @@ class CameraScanner(
             addDiscovery(discoveries, discovery)
         }
 
+        return discoveries.values.toList()
+    }
+
+    fun captureBaseus(targetHosts: List<String>, onProgress: (String) -> Unit): List<CameraDiscovery> {
+        val discoveries = linkedMapOf<String, CameraDiscovery>()
+        val hosts = targetHosts.map { it.trim() }.filter { it.isNotBlank() }.distinct()
+        if (hosts.isEmpty()) {
+            onProgress("No Baseus target IPs provided")
+            return emptyList()
+        }
+
+        onProgress("Baseus capture mode enabled for ${hosts.joinToString(", ")}")
+        hosts.forEach { host ->
+            onProgress("Capturing Baseus endpoints on $host")
+            captureHost(host, onProgress).forEach { discovery ->
+                addDiscovery(discoveries, discovery)
+            }
+        }
         return discoveries.values.toList()
     }
 
@@ -287,6 +310,18 @@ class CameraScanner(
         }
     }
 
+    private fun captureHost(host: String, onProgress: (String) -> Unit): List<CameraDiscovery> {
+        val discoveries = linkedMapOf<String, CameraDiscovery>()
+        val candidatePorts = listOf(80, 443, 554, 6554, 8000, 8080, 8081, 8443, 8554, 8899, 37777, 5000, 5001)
+
+        candidatePorts.forEach { port ->
+            onProgress("Baseus capture probing $host:$port")
+            probeHostForHttpWithVendorHints(host, port, onProgress)?.let { addDiscovery(discoveries, it) }
+            probeHostForRtspWithVendorHints(host, port, onProgress)?.let { addDiscovery(discoveries, it) }
+        }
+        return discoveries.values.toList()
+    }
+
     private fun scanSsdpCandidates(onProgress: (String) -> Unit): List<CameraDiscovery> {
         val request = """
             M-SEARCH * HTTP/1.1
@@ -441,6 +476,126 @@ class CameraScanner(
         return null
     }
 
+    private fun probeHostForHttpWithVendorHints(host: String, port: Int, onProgress: (String) -> Unit): CameraDiscovery? {
+        val endpointCandidates = listOf(
+            HttpEndpointPreset("Baseus / VicoHome", listOf(
+                "/",
+                "/index.html",
+                "/live",
+                "/liveview",
+                "/liveView",
+                "/preview",
+                "/play",
+                "/deviceinfo",
+                "/deviceInfo",
+                "/api/deviceinfo",
+                "/api/deviceInfo",
+                "/api/device/info",
+                "/api/v1/device/info",
+                "/api/v1/camera/info",
+                "/v1/device/info",
+                "/v1/camera/info",
+                "/cgi-bin/deviceInfo.cgi",
+                "/cgi-bin/magicBox.cgi?action=getSystemInfo",
+                "/cgi-bin/api.cgi?cmd=GetDevInfo",
+                "/cgi-bin/api.cgi?cmd=GetRtspUrl",
+                "/ISAPI/System/deviceInfo",
+                "/ISAPI/System/capabilities",
+            )),
+        )
+
+        for (preset in endpointCandidates) {
+            for (endpoint in preset.paths) {
+                val url = "http://$host:$port$endpoint"
+                onProgress("Baseus HTTP: $url")
+                val response = fetchHttp(url) ?: continue
+                extractHttpDiscovery(host, port, preset.name, endpoint, response)?.let { discovery ->
+                    return discovery
+                }
+            }
+        }
+
+        val httpsEndpointCandidates = listOf(
+            "/",
+            "/index.html",
+            "/live",
+            "/deviceinfo",
+            "/api/device/info",
+            "/api/v1/device/info",
+        )
+        for (endpoint in httpsEndpointCandidates) {
+            val url = "https://$host:$port$endpoint"
+            onProgress("Baseus HTTPS: $url")
+            val response = fetchHttp(url) ?: continue
+            extractHttpDiscovery(host, port, "Baseus HTTPS", endpoint, response)?.let { discovery ->
+                return discovery
+            }
+        }
+
+        return null
+    }
+
+    private fun probeHostForRtspWithVendorHints(host: String, port: Int, onProgress: (String) -> Unit): CameraDiscovery? {
+        val socketAddress = InetSocketAddress(host, port)
+        Socket().use { socket ->
+            try {
+                socket.connect(socketAddress, 350)
+            } catch (_: Exception) {
+                return null
+            }
+        }
+
+        val baseusPaths = listOf(
+            "/",
+            "/live",
+            "/live0",
+            "/live1",
+            "/stream",
+            "/stream1",
+            "/stream/main",
+            "/stream/sub",
+            "/main",
+            "/sub",
+            "/videoMain",
+            "/videoSub",
+            "/stream_0",
+            "/stream_1",
+            "/live/ch00_0",
+            "/live/ch00_1",
+            "/live/ch01_0",
+            "/live/ch01_1",
+            "/cam/realmonitor?channel=1&subtype=0",
+            "/cam/realmonitor?channel=1&subtype=1",
+            "/axis-media/media.amp",
+        )
+        for (path in baseusPaths) {
+            val candidate = buildRtspUrl(host, port, path)
+            onProgress("Baseus RTSP: $candidate")
+            when (probeRtsp(candidate)) {
+                RtspProbeResult.Valid -> {
+                    return CameraDiscovery(
+                        label = host,
+                        streamUrl = applyCredentials(candidate),
+                        source = "Baseus capture",
+                        details = "RTSP path $path",
+                        needsAuth = false,
+                    )
+                }
+                RtspProbeResult.AuthRequired -> {
+                    return CameraDiscovery(
+                        label = host,
+                        streamUrl = applyCredentials(candidate),
+                        source = "Baseus capture",
+                        details = "RTSP path $path (auth required)",
+                        needsAuth = true,
+                    )
+                }
+                RtspProbeResult.Invalid -> Unit
+            }
+        }
+        return null
+    }
+
     private data class HttpResponse(
         val code: Int,
         val contentType: String,
@@ -461,6 +616,10 @@ class CameraScanner(
                 readTimeout = 1500
                 instanceFollowRedirects = true
                 setRequestProperty("User-Agent", "OpenMonitorBridge/1.0")
+            }.also { configuredConnection ->
+                if (configuredConnection is HttpsURLConnection) {
+                    installTrustAll(configuredConnection)
+                }
             }
         } catch (_: Exception) {
             return null
@@ -479,6 +638,23 @@ class CameraScanner(
             null
         } finally {
             connection.disconnect()
+        }
+    }
+
+    private fun installTrustAll(connection: HttpsURLConnection) {
+        try {
+            val trustManagers = arrayOf<TrustManager>(
+                object : X509TrustManager {
+                    override fun getAcceptedIssuers() = emptyArray<java.security.cert.X509Certificate>()
+                    override fun checkClientTrusted(chain: Array<out java.security.cert.X509Certificate>?, authType: String?) = Unit
+                    override fun checkServerTrusted(chain: Array<out java.security.cert.X509Certificate>?, authType: String?) = Unit
+                },
+            )
+            val context = SSLContext.getInstance("TLS")
+            context.init(null, trustManagers, java.security.SecureRandom())
+            connection.sslSocketFactory = context.socketFactory
+            connection.hostnameVerifier = HostnameVerifier { _, _ -> true }
+        } catch (_: Exception) {
         }
     }
 
