@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
+import android.content.pm.ServiceInfo
 import androidx.core.app.NotificationCompat
 import java.io.FileInputStream
 import java.nio.ByteBuffer
@@ -51,10 +52,10 @@ class BaseusVpnCaptureService : VpnService() {
     private fun startCapture() {
         if (!running.compareAndSet(false, true)) {
             updateState(true, "VPN capture already running for ${targetPackage()} → $targetIp")
-            startForeground(NOTIFICATION_ID, buildNotification())
+            promoteToForeground()
             return
         }
-        startForeground(NOTIFICATION_ID, buildNotification())
+        promoteToForeground()
         updateState(true, "Starting VPN capture for ${targetPackage()} → $targetIp")
         worker = Thread {
             try {
@@ -266,6 +267,19 @@ class BaseusVpnCaptureService : VpnService() {
             .setOngoing(true)
             .addAction(android.R.drawable.ic_media_pause, "Stop", stopPendingIntent)
             .build()
+    }
+
+    private fun promoteToForeground() {
+        val notification = buildNotification()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED,
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
     }
 
     private fun ensureNotificationChannel() {
