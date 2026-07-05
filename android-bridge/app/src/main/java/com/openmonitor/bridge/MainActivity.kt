@@ -22,6 +22,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var serverView: TextView
     private lateinit var hlsView: TextView
     private lateinit var bridgeIdView: TextView
+    private lateinit var logView: TextView
     private lateinit var startButton: Button
     private lateinit var stopButton: Button
 
@@ -47,6 +48,7 @@ class MainActivity : AppCompatActivity() {
         serverView = findViewById(R.id.serverValue)
         hlsView = findViewById(R.id.hlsValue)
         bridgeIdView = findViewById(R.id.bridgeIdValue)
+        logView = findViewById(R.id.logValue)
         startButton = findViewById(R.id.startButton)
         stopButton = findViewById(R.id.stopButton)
 
@@ -106,5 +108,8 @@ class MainActivity : AppCompatActivity() {
         val serverUrl = state.serverUrl.ifBlank { NetworkUtils.serverUrl(BridgeConfig.HTTP_PORT) }
         hlsView.text = if (state.playlistUrl.isBlank()) "—" else "$serverUrl${state.playlistUrl}"
         bridgeIdView.text = state.bridgeId.ifBlank { "—" }
+        logView.text = BridgeLogStore.snapshot(24)
+            .joinToString("\n") { it.formatLine() }
+            .ifBlank { "No logs yet." }
     }
 }

@@ -17,10 +17,13 @@ class BridgeService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        BridgeLogStore.initialize(cacheDir)
+        BridgeLogStore.info("Bridge service created")
         rtspBridge = RtspHlsBridge(this, cacheDir)
         httpServer = BridgeHttpServer(cacheDir)
         httpServer.start()
         startAsForeground("OpenMonitor Bridge ready")
+        BridgeLogStore.info("HTTP server started at ${httpServer.baseUrl()}")
         BridgeStateStore.update {
             it.copy(
                 serverUrl = httpServer.baseUrl(),
@@ -34,6 +37,7 @@ class BridgeService : Service() {
             ACTION_START -> {
                 val rtspUrl = intent.getStringExtra(EXTRA_RTSP_URL).orEmpty().trim()
                 if (rtspUrl.isBlank()) {
+                    BridgeLogStore.warn("Start requested without RTSP URL")
                     BridgeStateStore.update { it.copy(status = "error", message = "Missing RTSP URL") }
                     startAsForeground("Missing RTSP URL")
                 } else {
@@ -41,6 +45,7 @@ class BridgeService : Service() {
                 }
             }
             ACTION_STOP -> {
+                BridgeLogStore.info("Stop requested")
                 rtspBridge.stop()
                 stopSelf()
             }
@@ -49,6 +54,7 @@ class BridgeService : Service() {
     }
 
     override fun onDestroy() {
+        BridgeLogStore.info("Bridge service destroyed")
         rtspBridge.stop()
         httpServer.stop()
         BridgeStateStore.update {
@@ -60,6 +66,7 @@ class BridgeService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     private fun startBridge(rtspUrl: String) {
+        BridgeLogStore.info("Starting bridge for $rtspUrl")
         rtspBridge.stop()
         val launch = rtspBridge.start(rtspUrl) { state ->
             BridgeStateStore.update { current ->

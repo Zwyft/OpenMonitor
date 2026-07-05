@@ -18,11 +18,16 @@ This is a phone-hosted RTSP-to-HLS bridge app.
 - Grant the app notification permission on Android 13+.
 - Enter a full RTSP URL, start the bridge, and open `http://<phone-ip>:18480/` from your iPad or another browser.
 - Copy the HLS URL from the bridge screen if you want to load the stream directly in Safari.
+- If it fails, open `http://<phone-ip>:18480/api/logs` or read the log tail in the phone app.
 
 ## Network notes
 - The bridge listens on port `18480` by default.
 - Keep the phone and iPad on the same Wi‑Fi network.
 - Do not expose the port to the public internet; a different port is not a substitute for real security.
+
+## Troubleshooting
+- If you see `Timed out waiting for HLS output`, check the log tail for a VLC event or a startup exception.
+- If the HLS URL returns `Not found`, make sure you are using the current phone IP shown on the bridge screen.
 
 ## GitHub Actions
 - A workflow at `.github/workflows/build-android-bridge-apk.yml` builds a debug APK and uploads it as an artifact.

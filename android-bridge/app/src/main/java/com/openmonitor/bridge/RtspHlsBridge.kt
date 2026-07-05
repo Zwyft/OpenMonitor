@@ -41,6 +41,9 @@ class RtspHlsBridge(
         val segmentPattern = File(bridgeDir, "segment-########.ts").absolutePath
         val localIndexUrl = "segment-########.ts"
         val sout = buildSout(playlistFile.absolutePath, segmentPattern, localIndexUrl)
+        BridgeLogStore.info("Bridge $bridgeId output dir: ${bridgeDir.absolutePath}")
+        BridgeLogStore.info("Bridge $bridgeId playlist: ${playlistFile.absolutePath}")
+        BridgeLogStore.info("Bridge $bridgeId sout: $sout")
 
         notifyState(
             BridgeState(
@@ -62,10 +65,40 @@ class RtspHlsBridge(
                     "--network-caching=1000",
                     "--sout-keep",
                 )
+                BridgeLogStore.info("Bridge $bridgeId VLC options: ${options.joinToString(" ")}")
                 val vlc = LibVLC(context, options)
                 val player = MediaPlayer(vlc)
                 libVlc = vlc
                 mediaPlayer = player
+                player.setEventListener(object : MediaPlayer.EventListener {
+                    override fun onEvent(event: MediaPlayer.Event) {
+                        val name = when (event.type) {
+                            MediaPlayer.Event.Opening -> "Opening"
+                            MediaPlayer.Event.Buffering -> "Buffering"
+                            MediaPlayer.Event.Playing -> "Playing"
+                            MediaPlayer.Event.Paused -> "Paused"
+                            MediaPlayer.Event.Stopped -> "Stopped"
+                            MediaPlayer.Event.EndReached -> "EndReached"
+                            MediaPlayer.Event.EncounteredError -> "EncounteredError"
+                            MediaPlayer.Event.TimeChanged -> "TimeChanged"
+                            MediaPlayer.Event.PositionChanged -> "PositionChanged"
+                            MediaPlayer.Event.Vout -> "Vout"
+                            else -> "Event(${event.type})"
+                        }
+                        BridgeLogStore.info("Bridge $bridgeId VLC event: $name")
+                        if (event.type == MediaPlayer.Event.EncounteredError) {
+                            notifyState(
+                                BridgeState(
+                                    bridgeId = bridgeId,
+                                    rtspUrl = rtspUrl,
+                                    playlistUrl = "/hls/$bridgeId/index.m3u8",
+                                    status = "error",
+                                    message = "LibVLC reported an error; open logs for details",
+                                ),
+                            )
+                        }
+                    }
+                })
 
                 val media = Media(vlc, Uri.parse(rtspUrl))
                 media.setHWDecoderEnabled(true, false)
@@ -75,8 +108,10 @@ class RtspHlsBridge(
 
                 player.setMedia(media)
                 media.release()
+                BridgeLogStore.info("Bridge $bridgeId starting playback")
                 player.play()
             } catch (exception: Exception) {
+                BridgeLogStore.error("Bridge $bridgeId failed to start: ${exception.stackTraceToString()}")
                 notifyState(
                     BridgeState(
                         bridgeId = bridgeId,
@@ -90,8 +125,9 @@ class RtspHlsBridge(
         }
 
         thread(name = "RtspHlsBridgeWait-$bridgeId", isDaemon = true) {
-            repeat(30) {
+            repeat(30) { attempt ->
                 if (playlistFile.exists()) {
+                    BridgeLogStore.info("Bridge $bridgeId playlist exists after ${attempt + 1} seconds")
                     notifyState(
                         BridgeState(
                             bridgeId = bridgeId,
@@ -103,9 +139,11 @@ class RtspHlsBridge(
                     )
                     return@thread
                 }
+                BridgeLogStore.info("Bridge $bridgeId waiting for HLS output (${attempt + 1}/30)")
                 TimeUnit.SECONDS.sleep(1)
             }
             if (!playlistFile.exists()) {
+                BridgeLogStore.error("Bridge $bridgeId timed out waiting for HLS output")
                 notifyState(
                     BridgeState(
                         bridgeId = bridgeId,
@@ -122,6 +160,7 @@ class RtspHlsBridge(
     }
 
     fun stop() {
+        BridgeLogStore.info("Stopping bridge")
         try {
             mediaPlayer?.stop()
         } catch (_: Exception) {

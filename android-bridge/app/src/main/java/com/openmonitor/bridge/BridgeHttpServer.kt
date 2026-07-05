@@ -62,6 +62,7 @@ class BridgeHttpServer(
             when {
                 method == "GET" && path == "/" -> respondText(output, 200, "text/html; charset=utf-8", rootPage())
                 method == "GET" && path == "/api/state" -> respondText(output, 200, "application/json; charset=utf-8", BridgeStateStore.snapshot().toJson())
+                method == "GET" && path == "/api/logs" -> respondText(output, 200, "application/json; charset=utf-8", logsJson())
                 method == "GET" && path.startsWith("/hls/") -> serveFile(output, path.removePrefix("/hls/"))
                 else -> respondText(output, 404, "text/plain; charset=utf-8", "Not found")
             }
@@ -96,6 +97,8 @@ class BridgeHttpServer(
                 <p>Message: ${escapeHtml(state.message)}</p>
                 <p>RTSP source: <code>${escapeHtml(state.rtspUrl.ifBlank { "none" })}</code></p>
                 <p>HLS: ${if (state.playlistUrl.isBlank()) "<code>none</code>" else """<a href="${escapeHtml("$serverUrl${state.playlistUrl}")}">${escapeHtml("$serverUrl${state.playlistUrl}")}</a>"""}</p>
+                <h2>Logs</h2>
+                <pre style="white-space: pre-wrap; word-break: break-word; background:#0b1220; border-radius:12px; padding:12px; max-height:320px; overflow:auto;">${escapeHtml(logsText(40))}</pre>
                 <p class="muted">Use the Android app to start or stop the bridge. Open the HLS URL from another device on the same Wi‑Fi.</p>
               </div>
             </body>
@@ -184,6 +187,32 @@ class BridgeHttpServer(
             .replace(">", "&gt;")
             .replace("\"", "&quot;")
             .replace("'", "&#39;")
+    }
+
+    private fun logsText(limit: Int): String {
+        return BridgeLogStore.snapshot(limit)
+            .joinToString("\n") { it.formatLine() }
+            .ifBlank { "No logs yet." }
+    }
+
+    private fun logsJson(): String {
+        val logs = BridgeLogStore.snapshot()
+        return buildString {
+            append('{')
+            append("\"entries\":[")
+            logs.forEachIndexed { index, entry ->
+                if (index > 0) append(',')
+                append('{')
+                append("\"timestampMillis\":")
+                append(entry.timestampMillis)
+                append(",\"level\":\"")
+                append(entry.level.jsonEscape())
+                append("\",\"message\":\"")
+                append(entry.message.jsonEscape())
+                append("\"}")
+            }
+            append("]}")
+        }
     }
 }
 
