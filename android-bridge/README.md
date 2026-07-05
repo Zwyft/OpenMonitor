@@ -10,8 +10,6 @@ This is a phone-hosted RTSP-to-HLS bridge app.
 - Scans the LAN for ONVIF and RTSP cameras and tries to resolve a usable stream URI automatically.
 
 ## What it does not do yet
-- Camera discovery on Android.
-- ONVIF probing.
 - Baseus-specific reverse engineering.
 
 ## Build notes
@@ -38,4 +36,4 @@ This is a phone-hosted RTSP-to-HLS bridge app.
 - The workflow runs on pushes to `main` and `codex/build-ipa-ci`, and it can also be started manually.
 
 ## Recommended next step
-- If this version works for your cameras, I can add LAN discovery and a cleaner iPad dashboard later.
+- If you still need more camera compatibility, the next pass is vendor-specific path probing and auth handling for the Baseus cameras.
