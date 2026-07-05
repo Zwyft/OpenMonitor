@@ -26,6 +26,7 @@ OpenMonitor now has two paths:
 - It is the better path if you want the phone itself to host the RTSP-to-HLS bridge.
 - Open `android-bridge/` in Android Studio, build an APK, install it on the phone, and start a bridge from the app.
 - The app serves the HLS URL over HTTP so the iPad can open it on the same Wi‑Fi.
+- GitHub Actions now has `.github/workflows/build-android-bridge-apk.yml` to build a debug APK artifact automatically.
 
 ## Native app path
 - Open `OpenMonitor.xcodeproj` in Xcode.
