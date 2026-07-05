@@ -7,6 +7,7 @@ This is a phone-hosted RTSP-to-HLS bridge app.
 - Accepts an RTSP stream URL.
 - Uses LibVLC to convert RTSP into HLS in app cache.
 - Serves the HLS playlist and segments over HTTP so another device can open them in a browser.
+- Scans the LAN for ONVIF and RTSP cameras and tries to resolve a usable stream URI automatically.
 
 ## What it does not do yet
 - Camera discovery on Android.
@@ -16,7 +17,10 @@ This is a phone-hosted RTSP-to-HLS bridge app.
 ## Build notes
 - Open `android-bridge/` in Android Studio or build it with Gradle on a machine with the Android SDK installed.
 - Grant the app notification permission on Android 13+.
-- Enter a full RTSP URL, start the bridge, and open `http://<phone-ip>:18480/` from your iPad or another browser.
+- Tap `Scan cameras` first, then choose a discovered camera or paste a stream URL manually.
+- Tapping a discovered camera will immediately start the bridge with that URI.
+- Enter optional credentials if the camera requires them.
+- Start the bridge, then open `http://<phone-ip>:18480/` from your iPad or another browser.
 - Copy the HLS URL from the bridge screen if you want to load the stream directly in Safari.
 - If it fails, open `http://<phone-ip>:18480/api/logs` or read the log tail in the phone app.
 

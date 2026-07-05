@@ -63,6 +63,7 @@ class BridgeHttpServer(
                 method == "GET" && path == "/" -> respondText(output, 200, "text/html; charset=utf-8", rootPage())
                 method == "GET" && path == "/api/state" -> respondText(output, 200, "application/json; charset=utf-8", BridgeStateStore.snapshot().toJson())
                 method == "GET" && path == "/api/logs" -> respondText(output, 200, "application/json; charset=utf-8", logsJson())
+                method == "GET" && path == "/api/cameras" -> respondText(output, 200, "application/json; charset=utf-8", camerasJson())
                 method == "GET" && path.startsWith("/hls/") -> serveFile(output, path.removePrefix("/hls/"))
                 else -> respondText(output, 404, "text/plain; charset=utf-8", "Not found")
             }
@@ -97,6 +98,10 @@ class BridgeHttpServer(
                 <p>Message: ${escapeHtml(state.message)}</p>
                 <p>RTSP source: <code>${escapeHtml(state.rtspUrl.ifBlank { "none" })}</code></p>
                 <p>HLS: ${if (state.playlistUrl.isBlank()) "<code>none</code>" else """<a href="${escapeHtml("$serverUrl${state.playlistUrl}")}">${escapeHtml("$serverUrl${state.playlistUrl}")}</a>"""}</p>
+                <h2>Discovered cameras</h2>
+                <div style="background:#0b1220; border-radius:12px; padding:12px; max-height:240px; overflow:auto;">
+                  ${camerasListHtml()}
+                </div>
                 <h2>Logs</h2>
                 <pre style="white-space: pre-wrap; word-break: break-word; background:#0b1220; border-radius:12px; padding:12px; max-height:320px; overflow:auto;">${escapeHtml(logsText(40))}</pre>
                 <p class="muted">Use the Android app to start or stop the bridge. Open the HLS URL from another device on the same Wi‑Fi.</p>
@@ -210,6 +215,61 @@ class BridgeHttpServer(
                 append("\",\"message\":\"")
                 append(entry.message.jsonEscape())
                 append("\"}")
+            }
+            append("]}")
+        }
+    }
+
+    private fun camerasListHtml(): String {
+        val cameras = CameraDiscoveryStore.snapshot()
+        if (cameras.isEmpty()) {
+            return "<div class=\"muted\">No cameras discovered yet.</div>"
+        }
+        return buildString {
+            append("<ul style=\"margin:0; padding-left:20px;\">")
+            cameras.forEach { camera ->
+                append("<li style=\"margin-bottom:10px;\">")
+                append("<div><strong>")
+                append(escapeHtml(camera.label))
+                append("</strong> — ")
+                append(escapeHtml(camera.source))
+                if (camera.needsAuth) {
+                    append(" — auth required")
+                }
+                append("</div>")
+                if (camera.details.isNotBlank()) {
+                    append("<div class=\"muted\">")
+                    append(escapeHtml(camera.details))
+                    append("</div>")
+                }
+                append("<div><code>")
+                append(escapeHtml(camera.streamUrl))
+                append("</code></div>")
+                append("</li>")
+            }
+            append("</ul>")
+        }
+    }
+
+    private fun camerasJson(): String {
+        val cameras = CameraDiscoveryStore.snapshot()
+        return buildString {
+            append('{')
+            append("\"entries\":[")
+            cameras.forEachIndexed { index, camera ->
+                if (index > 0) append(',')
+                append('{')
+                append("\"label\":\"")
+                append(camera.label.jsonEscape())
+                append("\",\"streamUrl\":\"")
+                append(camera.streamUrl.jsonEscape())
+                append("\",\"source\":\"")
+                append(camera.source.jsonEscape())
+                append("\",\"details\":\"")
+                append(camera.details.jsonEscape())
+                append("\",\"needsAuth\":")
+                append(camera.needsAuth)
+                append("}")
             }
             append("]}")
         }

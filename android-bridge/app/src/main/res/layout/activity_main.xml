@@ -23,7 +23,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
-            android:text="Run this on the phone. Open the HLS URL from another device on the same Wi‑Fi."
+            android:text="Run this on the phone. Scan the LAN, select a camera, then open the HLS URL from another device on the same Wi‑Fi."
             android:textColor="#94A3B8"
             android:textSize="14sp" />
 
@@ -38,6 +38,28 @@
             android:textColorHint="#64748B"
             android:backgroundTint="#38BDF8" />
 
+        <EditText
+            android:id="@+id/usernameInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:hint="username (optional)"
+            android:inputType="textEmailAddress"
+            android:textColor="#E2E8F0"
+            android:textColorHint="#64748B"
+            android:backgroundTint="#38BDF8" />
+
+        <EditText
+            android:id="@+id/passwordInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:hint="password (optional)"
+            android:inputType="textPassword"
+            android:textColor="#E2E8F0"
+            android:textColorHint="#64748B"
+            android:backgroundTint="#38BDF8" />
+
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -45,10 +67,18 @@
             android:orientation="horizontal">
 
             <Button
+                android:id="@+id/scanButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Scan cameras" />
+
+            <Button
                 android:id="@+id/startButton"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
+                android:layout_marginStart="12dp"
                 android:text="Start bridge" />
 
             <Button
@@ -59,6 +89,35 @@
                 android:layout_weight="1"
                 android:text="Stop" />
         </LinearLayout>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="Scan status"
+            android:textColor="#CBD5E1"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/scanStatusValue"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textColor="#E2E8F0"
+            android:textSize="14sp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="Discovered cameras"
+            android:textColor="#CBD5E1"
+            android:textStyle="bold" />
+
+        <LinearLayout
+            android:id="@+id/cameraContainer"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical" />
 
         <TextView
             android:layout_width="match_parent"
