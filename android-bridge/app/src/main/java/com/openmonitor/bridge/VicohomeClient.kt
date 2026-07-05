@@ -25,16 +25,24 @@ class VicohomeClient(
             try {
                 onProgress("Logging into Baseus cloud (${region.label})")
                 val token = login(region, onProgress)
+                val privacyConsentUpdated = updatePrivacyConsent(token, region, onProgress)
                 onProgress("Loading Baseus cloud devices (${region.label})")
                 val devices = listDevices(token, region, onProgress)
                 return VicohomeSyncResult(
                     devices = devices,
                     events = emptyList(),
-                    message = "Loaded ${devices.size} device(s) from Baseus ${region.label}",
+                    message = buildString {
+                        append("Loaded ")
+                        append(devices.size)
+                        append(" device(s) from Baseus ")
+                        append(region.label)
+                        append(if (privacyConsentUpdated) " with privacy consent updated" else " without privacy consent update")
+                    },
                     session = VicohomeSession(
                         email = email,
                         token = token,
                         region = region,
+                        privacyConsentUpdated = privacyConsentUpdated,
                     ),
                 )
             } catch (exception: Exception) {
@@ -195,6 +203,98 @@ class VicohomeClient(
             }
         }
         throw lastFailure ?: IllegalStateException("Device list request failed (${region.label})")
+    }
+
+    private fun updatePrivacyConsent(
+        token: String,
+        region: VicohomeRegion,
+        onProgress: (String) -> Unit = {},
+    ): Boolean {
+        var lastFailure: Exception? = null
+        for (baseUrl in region.consentBaseCandidates) {
+            for (serverName in region.userVisitServerCandidates) {
+                try {
+                    onProgress("Checking Baseus login consent at $baseUrl (server=$serverName)")
+                    val visitResponse = getJson(
+                        baseUrl,
+                        "/api/app/userVisit",
+                        region,
+                        token,
+                        queryParams = mapOf(
+                            "server" to serverName,
+                            "account" to email,
+                        ),
+                    )
+                    val visitResponseObject = JSONObject(visitResponse)
+                    val code = visitResponseObject.optInt("code", visitResponseObject.optInt("result", -1))
+                    if (code != 0) {
+                        continue
+                    }
+                    val visitData = visitResponseObject.optJSONObject("data") ?: return true
+                    val visitCardId = visitData.optLong("visitCardId").takeIf { it > 0L }
+                    if (visitCardId == null) {
+                        return true
+                    }
+
+                    onProgress("Accepting Baseus login consent card $visitCardId")
+                    val commitPayload = JSONObject()
+                        .put("state", VisitStateBean.STATE_COMMITTED)
+                        .put("visitCardId", visitCardId)
+                    val commitResponse = postJson(
+                        baseUrl,
+                        "/api/app/userVisit/readVisit",
+                        commitPayload,
+                        region,
+                        token,
+                    )
+                    val commitResponseObject = JSONObject(commitResponse)
+                    val commitCode = commitResponseObject.optInt("code", commitResponseObject.optInt("result", -1))
+                    if (commitCode != 0) {
+                        val message = commitResponseObject.optString("msg", commitResponseObject.optString("message", "unknown error"))
+                        throw IllegalStateException("Consent update failed (${region.label} @ $baseUrl): $message")
+                    }
+                    return true
+                } catch (exception: Exception) {
+                    lastFailure = exception
+                }
+            }
+        }
+
+        if (lastFailure != null) {
+            onProgress("Baseus consent update unavailable: ${lastFailure.message ?: "unknown error"}")
+        }
+        return false
+    }
+
+    private fun getJson(
+        baseUrl: String,
+        path: String,
+        region: VicohomeRegion,
+        token: String? = null,
+        queryParams: Map<String, String> = emptyMap(),
+    ): String {
+        val connection = (URL(buildRequestUrl(baseUrl, path, queryParams)).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 5000
+            readTimeout = 7000
+            setRequestProperty("Accept", "application/json")
+            setRequestProperty("User-Agent", "OpenMonitorBridge/1.0")
+            setRequestHeaders(this, region, token, "")
+            val timestamp = System.currentTimeMillis().toString()
+            setRequestProperty("timestamp", timestamp)
+            setRequestProperty("sign", buildRequestSign("", timestamp))
+        }
+
+        return try {
+            val responseStream = if (connection.responseCode in 200..299) {
+                connection.inputStream
+            } else {
+                connection.errorStream
+            } ?: throw IllegalStateException("Vicohome request failed with HTTP ${connection.responseCode}")
+            readAll(responseStream)
+        } finally {
+            connection.disconnect()
+        }
     }
 
     private fun listRecentEvents(

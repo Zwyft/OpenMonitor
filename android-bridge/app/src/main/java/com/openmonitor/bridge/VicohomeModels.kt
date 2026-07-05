@@ -34,6 +34,7 @@ data class VicohomeSession(
     val email: String,
     val token: String,
     val region: VicohomeRegion,
+    val privacyConsentUpdated: Boolean = false,
     val updatedAtMillis: Long = System.currentTimeMillis(),
 )
 
@@ -65,10 +66,12 @@ data class VicohomeRegion(
     val apiBase: String,
     val apiBaseCandidates: List<String>,
     val authBaseCandidates: List<String>,
+    val consentBaseCandidates: List<String>,
     val webrtcApiBase: String,
     val webrtcApiBaseCandidates: List<String>,
     val countryNo: String,
     val loginCountryCode: String,
+    val userVisitServerCandidates: List<String>,
 )
 
 object VicohomeRegionCatalog {
@@ -83,6 +86,11 @@ object VicohomeRegionCatalog {
         authBaseCandidates = listOf(
             "https://baseus-us-auth-gw.baseussecurity.com",
         ),
+        consentBaseCandidates = listOf(
+            "https://baseus-us-auth-gw.baseussecurity.com",
+            "https://ipc-bu-us-gw.baseussecurity.com",
+            "https://api-us.vicohome.io",
+        ),
         webrtcApiBase = "https://api-us.vicoo.tech",
         webrtcApiBaseCandidates = listOf(
             "https://api-us.vicoo.tech",
@@ -90,6 +98,7 @@ object VicohomeRegionCatalog {
         ),
         countryNo = "US",
         loginCountryCode = "1",
+        userVisitServerCandidates = listOf("US", "us", "baseus-us", "baseus_us"),
     )
 
     val eu = VicohomeRegion(
@@ -103,6 +112,11 @@ object VicohomeRegionCatalog {
         authBaseCandidates = listOf(
             "https://baseus-eu-auth-gw.baseussecurity.com",
         ),
+        consentBaseCandidates = listOf(
+            "https://baseus-eu-auth-gw.baseussecurity.com",
+            "https://ipc-bu-eu-gw.baseussecurity.com",
+            "https://api-eu.vicohome.io",
+        ),
         webrtcApiBase = "https://api-eu.vicoo.tech",
         webrtcApiBaseCandidates = listOf(
             "https://api-eu.vicoo.tech",
@@ -110,6 +124,7 @@ object VicohomeRegionCatalog {
         ),
         countryNo = "EU",
         loginCountryCode = "44",
+        userVisitServerCandidates = listOf("EU", "eu", "baseus-eu", "baseus_eu"),
     )
 
     fun choicesFor(choice: VicohomeRegionChoice): List<VicohomeRegion> {
