@@ -21,7 +21,8 @@ class CameraScanner(
     private val username: String = "",
     private val password: String = "",
 ) {
-    private val rtspPorts = listOf(554, 8554)
+    private val rtspPorts = listOf(554, 6554, 8554)
+    private val httpPorts = listOf(80, 81, 88, 8000, 8080, 8081, 8899, 37777)
     private val rtspPathPresets = listOf(
         RtspPathPreset("Baseus / generic", listOf(
             "/",
@@ -30,6 +31,8 @@ class CameraScanner(
             "/live1",
             "/stream",
             "/stream1",
+            "/stream/main",
+            "/stream/sub",
             "/h264",
             "/onvif1",
             "/videoMain",
@@ -59,6 +62,20 @@ class CameraScanner(
             "/videoMain",
             "/videoSub",
         )),
+        RtspPathPreset("Tuya / smart camera", listOf(
+            "/main",
+            "/sub",
+            "/stream_0",
+            "/stream_1",
+            "/live/main",
+            "/live/sub",
+            "/live/ch00_0",
+            "/live/ch00_1",
+            "/live/ch01_0",
+            "/live/ch01_1",
+            "/live/ch00_0",
+            "/live/ch00_1",
+        )),
         RtspPathPreset("Uniview / generic", listOf(
             "/live/ch00_0",
             "/live/ch00_1",
@@ -69,11 +86,12 @@ class CameraScanner(
 
     fun scan(onProgress: (String) -> Unit): List<CameraDiscovery> {
         val discoveries = linkedMapOf<String, CameraDiscovery>()
-        val localIp = NetworkUtils.localIpv4Address()
-        if (localIp == null) {
+        val localAddresses = NetworkUtils.localIpv4Addresses()
+        if (localAddresses.isEmpty()) {
             onProgress("No local IPv4 address found")
             return emptyList()
         }
+        onProgress("Local addresses: ${localAddresses.joinToString(", ")}")
 
         onProgress("Discovering ONVIF devices")
         discoverOnvifDevices(onProgress).forEach { device ->
@@ -82,8 +100,18 @@ class CameraScanner(
             }
         }
 
+        onProgress("Scanning SSDP / UPnP devices")
+        scanSsdpCandidates(onProgress).forEach { discovery ->
+            addDiscovery(discoveries, discovery)
+        }
+
         onProgress("Scanning RTSP hosts on the LAN")
-        scanRtspCandidates(localIp, onProgress).forEach { discovery ->
+        scanRtspCandidates(onProgress).forEach { discovery ->
+            addDiscovery(discoveries, discovery)
+        }
+
+        onProgress("Scanning HTTP vendor APIs on the LAN")
+        scanHttpCandidates(onProgress).forEach { discovery ->
             addDiscovery(discoveries, discovery)
         }
 
@@ -209,11 +237,8 @@ class CameraScanner(
         return null
     }
 
-    private fun scanRtspCandidates(localIp: String, onProgress: (String) -> Unit): List<CameraDiscovery> {
-        val prefix = localIp.substringBeforeLast(".")
-        val hosts = (1..254)
-            .map { "$prefix.$it" }
-            .filter { it != localIp }
+    private fun scanRtspCandidates(onProgress: (String) -> Unit): List<CameraDiscovery> {
+        val hosts = buildScanHosts()
 
         val executor = Executors.newFixedThreadPool(16)
         try {
@@ -234,6 +259,88 @@ class CameraScanner(
             }
         } finally {
             executor.shutdownNow()
+        }
+    }
+
+    private fun scanHttpCandidates(onProgress: (String) -> Unit): List<CameraDiscovery> {
+        val hosts = buildScanHosts()
+
+        val executor = Executors.newFixedThreadPool(16)
+        try {
+            val tasks = hosts.flatMap { host ->
+                httpPorts.map { port ->
+                    Callable<CameraDiscovery?> {
+                        probeHostForHttp(host, port, onProgress)
+                    }
+                }
+            }
+            val futures = executor.invokeAll(tasks, 45, TimeUnit.SECONDS)
+            return futures.mapNotNull { future ->
+                try {
+                    future.get()
+                } catch (_: Exception) {
+                    null
+                }
+            }
+        } finally {
+            executor.shutdownNow()
+        }
+    }
+
+    private fun scanSsdpCandidates(onProgress: (String) -> Unit): List<CameraDiscovery> {
+        val request = """
+            M-SEARCH * HTTP/1.1
+            HOST: 239.255.255.250:1900
+            MAN: "ssdp:discover"
+            MX: 1
+            ST: ssdp:all
+
+        """.trimIndent().replace("\n", "\r\n")
+
+        val socket = DatagramSocket()
+        socket.soTimeout = 1500
+        try {
+            val packet = DatagramPacket(
+                request.toByteArray(StandardCharsets.UTF_8),
+                request.toByteArray(StandardCharsets.UTF_8).size,
+                InetSocketAddress("239.255.255.250", 1900),
+            )
+            socket.send(packet)
+
+            val discoveries = mutableListOf<CameraDiscovery>()
+            val buffer = ByteArray(64 * 1024)
+            val deadline = System.currentTimeMillis() + 2000
+            while (System.currentTimeMillis() < deadline) {
+                try {
+                    val response = DatagramPacket(buffer, buffer.size)
+                    socket.receive(response)
+                    val payload = String(response.data, 0, response.length, StandardCharsets.UTF_8)
+                    val headers = parseHttpHeaders(payload)
+                    val location = headers["location"].orEmpty()
+                    if (location.isBlank()) continue
+                    onProgress("SSDP response: $location")
+                    val locationUri = runCatching { URI(location) }.getOrNull() ?: continue
+                    val host = locationUri.host.orEmpty()
+                    val port = when {
+                        locationUri.port > 0 -> locationUri.port
+                        locationUri.scheme.equals("https", ignoreCase = true) -> 443
+                        else -> 80
+                    }
+                    if (host.isNotBlank()) {
+                        probeHostForHttp(host, port, onProgress)?.let { discovery ->
+                            discoveries += discovery
+                        }
+                        probeHostForRtsp(host, port, onProgress)?.let { discovery ->
+                            discoveries += discovery
+                        }
+                    }
+                } catch (_: Exception) {
+                    break
+                }
+            }
+            return discoveries
+        } finally {
+            socket.close()
         }
     }
 
@@ -278,6 +385,207 @@ class CameraScanner(
         }
 
         return null
+    }
+
+    private fun probeHostForHttp(host: String, port: Int, onProgress: (String) -> Unit): CameraDiscovery? {
+        val socketAddress = InetSocketAddress(host, port)
+        Socket().use { socket ->
+            try {
+                socket.connect(socketAddress, 350)
+            } catch (_: Exception) {
+                return null
+            }
+        }
+
+        val endpointCandidates = listOf(
+            HttpEndpointPreset("Hikvision", listOf(
+                "/ISAPI/System/deviceInfo",
+                "/ISAPI/System/capabilities",
+                "/ISAPI/Streaming/channels/101",
+                "/ISAPI/Streaming/channels/102",
+                "/Streaming/channels/101",
+                "/Streaming/channels/102",
+            )),
+            HttpEndpointPreset("Axis", listOf(
+                "/axis-cgi/basicdeviceinfo.cgi",
+                "/axis-cgi/param.cgi?action=list&group=Properties.Image",
+                "/axis-media/media.amp",
+            )),
+            HttpEndpointPreset("Reolink", listOf(
+                "/cgi-bin/api.cgi?cmd=GetDevInfo",
+                "/cgi-bin/api.cgi?cmd=GetRtspUrl",
+                "/cgi-bin/api.cgi?cmd=GetChannelstatus",
+            )),
+            HttpEndpointPreset("Dahua / Amcrest", listOf(
+                "/cgi-bin/magicBox.cgi?action=getSystemInfo",
+                "/cgi-bin/configManager.cgi?action=getConfig&name=VideoInOptions",
+            )),
+            HttpEndpointPreset("Baseus / generic", listOf(
+                "/",
+                "/index.html",
+                "/live",
+            )),
+        )
+
+        for (preset in endpointCandidates) {
+            for (endpoint in preset.paths) {
+                val url = "http://$host:$port$endpoint"
+                onProgress("Testing ${preset.name}: $url")
+                val response = fetchHttp(url) ?: continue
+                extractHttpDiscovery(host, port, preset.name, endpoint, response)?.let { discovery ->
+                    return discovery
+                }
+            }
+        }
+
+        return null
+    }
+
+    private data class HttpResponse(
+        val code: Int,
+        val contentType: String,
+        val body: String,
+    )
+
+    private data class HttpEndpointPreset(
+        val name: String,
+        val paths: List<String>,
+    )
+
+    private fun fetchHttp(url: String): HttpResponse? {
+        val requestUrl = applyCredentials(url)
+        val connection = try {
+            (URL(requestUrl).openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 1500
+                readTimeout = 1500
+                instanceFollowRedirects = true
+                setRequestProperty("User-Agent", "OpenMonitorBridge/1.0")
+            }
+        } catch (_: Exception) {
+            return null
+        }
+
+        return try {
+            val code = connection.responseCode
+            val stream = if (code in 200..399) connection.inputStream else connection.errorStream
+            val body = stream?.use { String(it.readBytes(), StandardCharsets.UTF_8) }.orEmpty()
+            HttpResponse(
+                code = code,
+                contentType = connection.contentType.orEmpty(),
+                body = body,
+            )
+        } catch (_: Exception) {
+            null
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun buildScanHosts(): List<String> {
+        val addresses = NetworkUtils.localIpv4Addresses()
+        val prefixes = addresses
+            .mapNotNull { address ->
+                val parts = address.split(".")
+                if (parts.size == 4) parts.take(3).joinToString(".") else null
+            }
+            .distinct()
+
+        val hosts = linkedSetOf<String>()
+        prefixes.forEach { prefix ->
+            for (lastOctet in 1..254) {
+                hosts += "$prefix.$lastOctet"
+            }
+        }
+        return hosts.toList()
+    }
+
+    private fun parseHttpHeaders(rawResponse: String): Map<String, String> {
+        val headers = linkedMapOf<String, String>()
+        rawResponse.lineSequence().forEach { line ->
+            val separator = line.indexOf(':')
+            if (separator > 0) {
+                headers[line.substring(0, separator).trim().lowercase()] = line.substring(separator + 1).trim()
+            }
+        }
+        return headers
+    }
+
+    private fun extractHttpDiscovery(
+        host: String,
+        port: Int,
+        vendor: String,
+        endpoint: String,
+        response: HttpResponse,
+    ): CameraDiscovery? {
+        val body = response.body
+        val rtspCandidates = extractRtspCandidates(body, host, port)
+        if (rtspCandidates.isNotEmpty()) {
+            val candidate = rtspCandidates.first()
+            return CameraDiscovery(
+                label = "$host:$port",
+                streamUrl = applyCredentials(candidate),
+                source = "$vendor HTTP",
+                details = endpoint,
+                needsAuth = false,
+            )
+        }
+
+        val endpointRtsp = when {
+            vendor == "Hikvision" && endpoint == "/Streaming/channels/101" -> "rtsp://$host:$port/Streaming/Channels/101"
+            vendor == "Hikvision" && endpoint == "/Streaming/channels/102" -> "rtsp://$host:$port/Streaming/Channels/102"
+            vendor == "Hikvision" && endpoint == "/ISAPI/Streaming/channels/101" -> "rtsp://$host:$port/ISAPI/Streaming/channels/101"
+            vendor == "Hikvision" && endpoint == "/ISAPI/Streaming/channels/102" -> "rtsp://$host:$port/ISAPI/Streaming/channels/102"
+            vendor == "Axis" && endpoint == "/axis-media/media.amp" -> "rtsp://$host:$port/axis-media/media.amp"
+            vendor == "Reolink" && endpoint == "/cgi-bin/api.cgi?cmd=GetRtspUrl" -> "rtsp://$host:$port/h264Preview_01_main"
+            vendor == "Dahua / Amcrest" && endpoint.startsWith("/cgi-bin/") -> "rtsp://$host:$port/cam/realmonitor?channel=1&subtype=0"
+            else -> null
+        }
+        if (endpointRtsp != null) {
+            return CameraDiscovery(
+                label = "$host:$port",
+                streamUrl = applyCredentials(endpointRtsp),
+                source = "$vendor HTTP",
+                details = endpoint,
+                needsAuth = response.code == 401,
+            )
+        }
+
+        if (response.code == 401) {
+            return CameraDiscovery(
+                label = "$host:$port",
+                streamUrl = "http://$host:$port$endpoint",
+                source = "$vendor HTTP",
+                details = "auth required",
+                needsAuth = true,
+            )
+        }
+
+        return null
+    }
+
+    private fun extractRtspCandidates(text: String, host: String, port: Int): List<String> {
+        val candidates = linkedSetOf<String>()
+        val absolutePattern = Regex("""rtsp://[^"'\s<>]+""", RegexOption.IGNORE_CASE)
+        val relativePatterns = listOf(
+            Regex("""/Streaming/(?:Channels?|channels?)/\d+""", RegexOption.IGNORE_CASE),
+            Regex("""/ISAPI/Streaming/channels/\d+""", RegexOption.IGNORE_CASE),
+            Regex("""/cam/realmonitor\?[^"'\s<>]+""", RegexOption.IGNORE_CASE),
+            Regex("""/axis-media/media\.amp(?:\?[^"'\s<>]+)?""", RegexOption.IGNORE_CASE),
+            Regex("""/h264Preview_01_(?:main|sub)""", RegexOption.IGNORE_CASE),
+            Regex("""/Preview_01_(?:main|sub)""", RegexOption.IGNORE_CASE),
+            Regex("""/live/ch00_\d+""", RegexOption.IGNORE_CASE),
+        )
+
+        absolutePattern.findAll(text).forEach { match ->
+            candidates += match.value.trim()
+        }
+        relativePatterns.forEach { pattern ->
+            pattern.findAll(text).forEach { match ->
+                candidates += buildRtspUrl(host, port, match.value.trim())
+            }
+        }
+        return candidates.toList()
     }
 
     private fun probeRtsp(uri: String): RtspProbeResult {
