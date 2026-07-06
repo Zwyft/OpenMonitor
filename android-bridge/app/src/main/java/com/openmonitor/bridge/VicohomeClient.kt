@@ -29,8 +29,12 @@ class VicohomeClient(
                 onProgress("Logging into Baseus cloud (${region.label})")
                 val accountLogin = loginBaseusAccount(region, onProgress)
                 val privacyConsentUpdated = updatePrivacyConsent(accountLogin.authToken, region, onProgress)
+                val resolvedRegion = resolveBaseusServiceRegion(accountLogin, region, onProgress)
+                if (resolvedRegion != region) {
+                    onProgress("Resolved Baseus service registry for ${region.label}")
+                }
                 val xmToken = try {
-                    loginXmSession(accountLogin, region, onProgress)
+                    loginXmSession(accountLogin, resolvedRegion, onProgress)
                 } catch (exception: Exception) {
                     val fallbackToken = firstNonBlank(accountLogin.xmTokenHint, accountLogin.authToken)
                     if (fallbackToken.isNotBlank()) {
@@ -40,10 +44,10 @@ class VicohomeClient(
                         throw exception
                     }
                 }
-                onProgress("Loading Baseus cloud devices (${region.label})")
+                onProgress("Loading Baseus cloud devices (${resolvedRegion.label})")
                 val devices = listDevices(
                     tokens = listOf(xmToken, accountLogin.xmTokenHint, accountLogin.authToken).filter { it.isNotBlank() }.distinct(),
-                    region = region,
+                    region = resolvedRegion,
                     onProgress = onProgress,
                 )
                 return VicohomeSyncResult(
@@ -53,14 +57,14 @@ class VicohomeClient(
                         append("Loaded ")
                         append(devices.size)
                         append(" device(s) from Baseus ")
-                        append(region.label)
+                        append(resolvedRegion.label)
                         append(if (privacyConsentUpdated) " with privacy consent updated" else " without privacy consent update")
                     },
                     session = VicohomeSession(
                         email = email,
                         accountAuthToken = accountLogin.authToken,
                         xmToken = xmToken,
-                        region = region,
+                        region = resolvedRegion,
                         privacyConsentUpdated = privacyConsentUpdated,
                     ),
                 )
@@ -111,6 +115,7 @@ class VicohomeClient(
                     payload,
                     session.region,
                     session.xmToken.ifBlank { session.accountAuthToken },
+                    extraHeaders = mapOf("Domain-Name" to "global_domain"),
                 )
                 val responseObject = JSONObject(response)
                 val resultCode = responseObject.optInt("code", responseObject.optInt("result", -1))
@@ -153,6 +158,7 @@ class VicohomeClient(
                     payload = payload,
                     region = region,
                     queryParams = mapOf("countryCode" to region.loginCountryCode),
+                    extraHeaders = mapOf("Domain-Name" to "Authorize_domain"),
                 )
                 val responseObject = JSONObject(response)
                 val code = responseObject.optInt("code", responseObject.optInt("result", -1))
@@ -196,6 +202,69 @@ class VicohomeClient(
             }
         }
         throw lastFailure ?: IllegalStateException("Login failed (${region.label})")
+    }
+
+    private fun resolveBaseusServiceRegion(
+        accountLogin: VicohomeAccountLogin,
+        region: VicohomeRegion,
+        onProgress: (String) -> Unit = {},
+    ): VicohomeRegion {
+        val candidateTokens = listOf(
+            TokenHarvestStore.latestDecodedTokenFromSource("Baseus auth response"),
+            TokenHarvestStore.latestTokenFromSource("Baseus auth response"),
+            accountLogin.xmTokenHint,
+            accountLogin.authToken,
+        ).filter { it.isNotBlank() }.distinct()
+        if (candidateTokens.isEmpty()) {
+            return region
+        }
+
+        for (baseUrl in (region.consentBaseCandidates + region.authBaseCandidates + region.apiBaseCandidates).distinct()) {
+            for (token in candidateTokens) {
+                try {
+                    onProgress("Loading Baseus service registry from $baseUrl")
+                    val response = getJson(
+                        baseUrl = baseUrl,
+                        path = "/api/app/homepage/global/dictByName",
+                        region = region,
+                        token = token,
+                        queryParams = mapOf(
+                            "dictName" to "global_constants",
+                            "dictDetailNames" to "base_cloud_service_list",
+                        ),
+                        extraHeaders = mapOf("Domain-Name" to "global_domain"),
+                    )
+                    val responseObject = JSONObject(response)
+                    val catalog = extractServiceCatalog(responseObject, region)
+                    if (catalog != null) {
+                        TokenHarvestStore.recordFromText("Baseus service registry", response)
+                        onProgress(
+                            "Baseus service registry resolved: ${catalog.label} ${catalog.value} bs=${catalog.bsServer} auth=${catalog.oauthServer} global=${catalog.globalServer}"
+                        )
+                        return region.copy(
+                            apiBase = firstNonBlank(catalog.bsServer, region.apiBase),
+                            apiBaseCandidates = listOf(catalog.bsServer, region.apiBaseCandidates.firstOrNull().orEmpty(), "https://api-${region.shortName.lowercase(Locale.US)}.vicohome.io")
+                                .filter { it.isNotBlank() }
+                                .distinct(),
+                            authBaseCandidates = listOf(catalog.oauthServer, region.authBaseCandidates.firstOrNull().orEmpty())
+                                .filter { it.isNotBlank() }
+                                .distinct(),
+                            consentBaseCandidates = listOf(catalog.oauthServer, catalog.bsServer, region.consentBaseCandidates.firstOrNull().orEmpty())
+                                .filter { it.isNotBlank() }
+                                .distinct(),
+                            webrtcApiBase = firstNonBlank(catalog.globalServer, region.webrtcApiBase),
+                            webrtcApiBaseCandidates = listOf(catalog.globalServer, region.webrtcApiBaseCandidates.firstOrNull().orEmpty(), "https://api-${region.shortName.lowercase(Locale.US)}.vicoo.tech")
+                                .filter { it.isNotBlank() }
+                                .distinct(),
+                            serverCode = catalog.value.ifBlank { region.serverCode },
+                        )
+                    }
+                } catch (exception: Exception) {
+                    onProgress("Baseus service registry lookup failed at $baseUrl: ${exception.message ?: "unknown error"}")
+                }
+            }
+        }
+        return region
     }
 
     private fun loginXmSession(
@@ -267,6 +336,7 @@ class VicohomeClient(
                         payload = variant.payload,
                         region = region,
                         token = bootstrapToken,
+                        domainNameHeader = "host_domain",
                     )
                     val responseObject = JSONObject(response)
                     val resultCode = responseObject.optInt("code", responseObject.optInt("result", -1))
@@ -311,6 +381,7 @@ class VicohomeClient(
                             region = region,
                             token = token,
                             headerMode = headerMode,
+                            domainNameHeader = "host_domain",
                         )
                         val responseObject = JSONObject(response)
                         val resultCode = responseObject.optInt("code", responseObject.optInt("result", 0))
@@ -341,6 +412,7 @@ class VicohomeClient(
                             region = region,
                             token = token,
                             headerMode = headerMode,
+                            domainNameHeader = "host_domain",
                         )
                         val responseObject = JSONObject(response)
                         val resultCode = responseObject.optInt("code", responseObject.optInt("result", 0))
@@ -381,6 +453,8 @@ class VicohomeClient(
         region: VicohomeRegion,
         token: String? = null,
         headerMode: TokenHeaderMode = TokenHeaderMode.BOTH,
+        domainNameHeader: String? = null,
+        extraHeaders: Map<String, String> = emptyMap(),
     ): String {
         val requestVariants = listOf(
             XmRequestVariant(
@@ -422,6 +496,12 @@ class VicohomeClient(
                 setRequestProperty("Lang", "en")
                 setRequestProperty("Content-Type", variant.contentType)
                 setRequestProperty("Accept", "application/json")
+                if (!domainNameHeader.isNullOrBlank()) {
+                    setRequestProperty("Domain-Name", domainNameHeader)
+                }
+                extraHeaders.forEach { (name, value) ->
+                    setRequestProperty(name, value)
+                }
                 if (variant.requestBody.isNotBlank()) {
                     setRequestProperty("Content-Length", variant.requestBody.toByteArray(StandardCharsets.UTF_8).size.toString())
                 }
@@ -455,6 +535,8 @@ class VicohomeClient(
         region: VicohomeRegion,
         token: String? = null,
         headerMode: TokenHeaderMode = TokenHeaderMode.BOTH,
+        domainNameHeader: String? = null,
+        extraHeaders: Map<String, String> = emptyMap(),
     ): String {
         var lastFailure: Exception? = null
         for (queryShape in listOf(emptyMap<String, String>(), mapOf("action" to action))) {
@@ -483,6 +565,12 @@ class VicohomeClient(
                 }
                 setRequestProperty("Lang", "en")
                 setRequestProperty("Accept", "application/json")
+                if (!domainNameHeader.isNullOrBlank()) {
+                    setRequestProperty("Domain-Name", domainNameHeader)
+                }
+                extraHeaders.forEach { (name, value) ->
+                    setRequestProperty(name, value)
+                }
             }
 
             try {
@@ -604,6 +692,7 @@ class VicohomeClient(
                             "server" to serverName,
                             "account" to email,
                         ),
+                        extraHeaders = mapOf("Domain-Name" to "global_domain"),
                     )
                     val visitResponseObject = JSONObject(visitResponse)
                     val code = visitResponseObject.optInt("code", visitResponseObject.optInt("result", -1))
@@ -626,6 +715,7 @@ class VicohomeClient(
                         commitPayload,
                         region,
                         token,
+                        extraHeaders = mapOf("Domain-Name" to "global_domain"),
                     )
                     val commitResponseObject = JSONObject(commitResponse)
                     val commitCode = commitResponseObject.optInt("code", commitResponseObject.optInt("result", -1))
@@ -652,6 +742,7 @@ class VicohomeClient(
         region: VicohomeRegion,
         token: String? = null,
         queryParams: Map<String, String> = emptyMap(),
+        extraHeaders: Map<String, String> = emptyMap(),
     ): String {
         val connection = (URL(buildRequestUrl(baseUrl, path, queryParams)).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
@@ -660,6 +751,9 @@ class VicohomeClient(
             setRequestProperty("Accept", "application/json")
             setRequestProperty("User-Agent", "OpenMonitorBridge/1.0")
             setRequestHeaders(this, region, token, "")
+            extraHeaders.forEach { (name, value) ->
+                setRequestProperty(name, value)
+            }
             val timestamp = System.currentTimeMillis().toString()
             setRequestProperty("timestamp", timestamp)
             setRequestProperty("sign", buildRequestSign("", timestamp))
@@ -746,6 +840,7 @@ class VicohomeClient(
         region: VicohomeRegion,
         token: String? = null,
         queryParams: Map<String, String> = emptyMap(),
+        extraHeaders: Map<String, String> = emptyMap(),
     ): String {
         val requestBody = payload.toString()
         val connection = (URL(buildRequestUrl(baseUrl, path, queryParams)).openConnection() as HttpURLConnection).apply {
@@ -757,6 +852,9 @@ class VicohomeClient(
             setRequestProperty("Accept", "application/json")
             setRequestProperty("User-Agent", "OpenMonitorBridge/1.0")
             setRequestHeaders(this, region, token, requestBody)
+            extraHeaders.forEach { (name, value) ->
+                setRequestProperty(name, value)
+            }
             if (requestBody.isNotBlank()) {
                 val timestamp = System.currentTimeMillis().toString()
                 setRequestProperty("timestamp", timestamp)
@@ -836,6 +934,74 @@ class VicohomeClient(
         if (requestBody.isNotBlank()) {
             connection.setRequestProperty("Content-Length", requestBody.toByteArray(StandardCharsets.UTF_8).size.toString())
         }
+    }
+
+    private fun extractServiceCatalog(responseObject: JSONObject, region: VicohomeRegion): VicohomeServiceCatalog? {
+        val candidates = mutableListOf<JSONObject>()
+        fun collectObjects(value: Any?) {
+            when (value) {
+                is JSONObject -> {
+                    candidates += value
+                    value.keys().forEachRemaining { key ->
+                        val nested = value.opt(key)
+                        if (nested is JSONObject || nested is JSONArray) {
+                            collectObjects(nested)
+                        }
+                    }
+                }
+                is JSONArray -> {
+                    for (index in 0 until value.length()) {
+                        collectObjects(value.opt(index))
+                    }
+                }
+            }
+        }
+
+        collectObjects(responseObject.opt("data"))
+        collectObjects(responseObject.optJSONArray("data"))
+        collectObjects(responseObject.optJSONObject("data")?.opt("base_cloud_service_list"))
+        collectObjects(responseObject.opt("base_cloud_service_list"))
+
+        val normalizedRegion = region.label.lowercase(Locale.US)
+        for (candidate in candidates) {
+            val label = candidate.optString("label").orEmpty()
+            val description = candidate.optString("description").orEmpty()
+            val value = candidate.optString("value").orEmpty()
+            val mergedText = listOf(label, description, value).joinToString(" ").lowercase(Locale.US)
+            if (normalizedRegion !in mergedText && !mergedText.contains(normalizedRegion.take(2))) {
+                continue
+            }
+            val serversObject = candidate.optJSONObject("servers")
+                ?: candidate.optJSONObject("value")?.takeIf { it.has("bsServer") || it.has("oauthServer") || it.has("globalServer") }
+                ?: value.takeIf { it.trim().startsWith("{") }?.let { runCatching { JSONObject(it) }.getOrNull() }
+            if (serversObject != null) {
+                val bsServer = firstNonBlank(
+                    serversObject.optString("bsServer").orEmpty(),
+                    serversObject.optString("host_domain").orEmpty(),
+                    serversObject.optString("hostDomain").orEmpty(),
+                )
+                val oauthServer = firstNonBlank(
+                    serversObject.optString("oauthServer").orEmpty(),
+                    serversObject.optString("auth_domain").orEmpty(),
+                    serversObject.optString("authDomain").orEmpty(),
+                )
+                val globalServer = firstNonBlank(
+                    serversObject.optString("globalServer").orEmpty(),
+                    serversObject.optString("global_domain").orEmpty(),
+                    serversObject.optString("globalDomain").orEmpty(),
+                )
+                if (bsServer.isNotBlank() || oauthServer.isNotBlank() || globalServer.isNotBlank()) {
+                    return VicohomeServiceCatalog(
+                        label = label.ifBlank { region.label },
+                        value = value.ifBlank { region.serverCode.orEmpty() },
+                        bsServer = bsServer.ifBlank { region.apiBase },
+                        oauthServer = oauthServer.ifBlank { region.authBaseCandidates.firstOrNull().orEmpty() },
+                        globalServer = globalServer.ifBlank { region.webrtcApiBase },
+                    )
+                }
+            }
+        }
+        return null
     }
 
     private fun buildRequestSign(requestBody: String, timestamp: String): String {

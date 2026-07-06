@@ -86,6 +86,7 @@ data class VicohomeRegion(
     val countryNo: String,
     val loginCountryCode: String,
     val userVisitServerCandidates: List<String>,
+    val serverCode: String? = null,
 )
 
 object VicohomeRegionCatalog {
@@ -155,6 +156,14 @@ data class VicohomeSyncResult(
     val events: List<VicohomeEvent>,
     val message: String,
     val session: VicohomeSession? = null,
+)
+
+data class VicohomeServiceCatalog(
+    val label: String,
+    val value: String,
+    val bsServer: String,
+    val oauthServer: String,
+    val globalServer: String,
 )
 
 data class VicohomeIceServer(
