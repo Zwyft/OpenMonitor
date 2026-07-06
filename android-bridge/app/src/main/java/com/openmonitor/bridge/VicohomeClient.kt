@@ -179,11 +179,6 @@ class VicohomeClient(
         onProgress: (String) -> Unit = {},
     ): String {
         val hostCandidates = (region.authBaseCandidates + region.apiBaseCandidates).distinct()
-        val bootstrapTokens = listOfNotNull(
-            TokenHarvestStore.latestDecodedTokenFromSource("Baseus auth"),
-            accountLogin.authToken.takeIf { it.isNotBlank() },
-            TokenHarvestStore.latestTokenWithNote("account token"),
-        ).distinct()
         val loginVariants = listOf(
             XmLoginVariant(
                 action = "UserLoginXn",
@@ -233,34 +228,32 @@ class VicohomeClient(
         var lastFailure: Exception? = null
         for (baseUrl in hostCandidates) {
             for ((variantIndex, variant) in loginVariants.withIndex()) {
-                for (bootstrapToken in bootstrapTokens.ifEmpty { listOf("") }) {
-                    try {
-                        onProgress("Trying Baseus XM session host $baseUrl (${variant.action} variant ${variantIndex + 1}/${loginVariants.size})")
-                        val response = postXmAction(
-                            baseUrl = baseUrl,
-                            action = variant.action,
-                            payload = variant.payload,
-                            region = region,
-                            token = bootstrapToken,
-                        )
-                        val responseObject = JSONObject(response)
-                        val resultCode = responseObject.optInt("code", responseObject.optInt("result", -1))
-                        if (resultCode != 0) {
-                            val message = responseObject.optString("msg", responseObject.optString("message", "unknown error"))
-                            throw IllegalStateException("XM session login failed (${region.label} @ $baseUrl, variant ${variantIndex + 1}): $message")
-                        }
-                        val token = extractXmAccessToken(responseObject)
-                        if (token.isNotBlank()) {
-                            TokenHarvestStore.record("Baseus XM session", token, "XM token")
-                            TokenHarvestStore.recordFromText("Baseus XM session response", response)
-                            onProgress("Baseus XM session token acquired from $baseUrl")
-                            return token
-                        }
-                        TokenHarvestStore.recordFromText("Baseus XM session response", response)
-                        throw IllegalStateException("XM session login returned no access token: ${response.take(240)}")
-                    } catch (exception: Exception) {
-                        lastFailure = exception
+                try {
+                    onProgress("Trying Baseus XM session host $baseUrl (${variant.action} variant ${variantIndex + 1}/${loginVariants.size})")
+                    val response = postXmAction(
+                        baseUrl = baseUrl,
+                        action = variant.action,
+                        payload = variant.payload,
+                        region = region,
+                        token = null,
+                    )
+                    val responseObject = JSONObject(response)
+                    val resultCode = responseObject.optInt("code", responseObject.optInt("result", -1))
+                    if (resultCode != 0) {
+                        val message = responseObject.optString("msg", responseObject.optString("message", "unknown error"))
+                        throw IllegalStateException("XM session login failed (${region.label} @ $baseUrl, variant ${variantIndex + 1}): $message")
                     }
+                    val token = extractXmAccessToken(responseObject)
+                    if (token.isNotBlank()) {
+                        TokenHarvestStore.record("Baseus XM session", token, "XM token")
+                        TokenHarvestStore.recordFromText("Baseus XM session response", response)
+                        onProgress("Baseus XM session token acquired from $baseUrl")
+                        return token
+                    }
+                    TokenHarvestStore.recordFromText("Baseus XM session response", response)
+                    throw IllegalStateException("XM session login returned no access token: ${response.take(240)}")
+                } catch (exception: Exception) {
+                    lastFailure = exception
                 }
             }
         }
