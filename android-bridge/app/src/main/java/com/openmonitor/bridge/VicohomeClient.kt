@@ -214,7 +214,7 @@ class VicohomeClient(
             TokenHarvestStore.latestTokenFromSource("Baseus auth response"),
             accountLogin.xmTokenHint,
             accountLogin.authToken,
-        ).filter { it.isNotBlank() }.distinct()
+        ).mapNotNull { it?.trim()?.takeIf { token -> token.isNotBlank() } }.distinct()
         if (candidateTokens.isEmpty()) {
             return region
         }
