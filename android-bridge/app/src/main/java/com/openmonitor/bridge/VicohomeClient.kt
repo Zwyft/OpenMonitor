@@ -353,53 +353,72 @@ class VicohomeClient(
         token: String? = null,
         headerMode: TokenHeaderMode = TokenHeaderMode.BOTH,
     ): String {
-        val requestBody = buildXmFormBody(payload)
-        val timestamp = System.currentTimeMillis()
-        val connection = (URL(buildRequestUrl(baseUrl, "", emptyMap())).openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = 5000
-            readTimeout = 7000
-            doOutput = true
-            setRequestProperty("User-Agent", buildXmUserAgent())
-            setRequestProperty("Timestamp", timestamp.toString())
-            setRequestProperty("Version", BASEUS_XM_SERVICE_VERSION)
-            setRequestProperty("SecretId", BASEUS_XM_APP_KEY)
-            setRequestProperty("Signature", buildXmSignature(timestamp))
-            setRequestProperty("RequestId", UUID.randomUUID().toString())
-            setRequestProperty("Action", action)
-            if (!token.isNullOrBlank()) {
-                when (headerMode) {
-                    TokenHeaderMode.BOTH -> {
-                        setRequestProperty("Authorization", token)
-                        setRequestProperty("auth", token)
+        val requestVariants = listOf(
+            XmRequestVariant(
+                contentType = "application/json; charset=utf-8",
+                requestBody = if (payload.length() == 0) "{}" else payload.toString(),
+                bodyLabel = "json",
+            ),
+            XmRequestVariant(
+                contentType = "application/x-www-form-urlencoded; charset=utf-8",
+                requestBody = buildXmFormBody(payload),
+                bodyLabel = "form",
+            ),
+        )
+        var lastFailure: Exception? = null
+        for (variant in requestVariants) {
+            val timestamp = System.currentTimeMillis()
+            val connection = (URL(buildRequestUrl(baseUrl, "", emptyMap())).openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = 5000
+                readTimeout = 7000
+                doOutput = true
+                setRequestProperty("User-Agent", buildXmUserAgent())
+                setRequestProperty("Timestamp", timestamp.toString())
+                setRequestProperty("Version", BASEUS_XM_SERVICE_VERSION)
+                setRequestProperty("SecretId", BASEUS_XM_APP_KEY)
+                setRequestProperty("Signature", buildXmSignature(timestamp))
+                setRequestProperty("RequestId", UUID.randomUUID().toString())
+                setRequestProperty("Action", action)
+                if (!token.isNullOrBlank()) {
+                    when (headerMode) {
+                        TokenHeaderMode.BOTH -> {
+                            setRequestProperty("Authorization", token)
+                            setRequestProperty("auth", token)
+                        }
+                        TokenHeaderMode.AUTH_ONLY -> setRequestProperty("auth", token)
+                        TokenHeaderMode.AUTHORIZATION_ONLY -> setRequestProperty("Authorization", token)
                     }
-                    TokenHeaderMode.AUTH_ONLY -> setRequestProperty("auth", token)
-                    TokenHeaderMode.AUTHORIZATION_ONLY -> setRequestProperty("Authorization", token)
+                }
+                setRequestProperty("Lang", "en")
+                setRequestProperty("Content-Type", variant.contentType)
+                setRequestProperty("Accept", "application/json")
+                if (variant.requestBody.isNotBlank()) {
+                    setRequestProperty("Content-Length", variant.requestBody.toByteArray(StandardCharsets.UTF_8).size.toString())
                 }
             }
-            setRequestProperty("Lang", "en")
-            setRequestProperty("Content-Type", "application/x-www-form-urlencoded; charset=utf-8")
-            setRequestProperty("Accept", "application/json")
-            if (requestBody.isNotBlank()) {
-                setRequestProperty("Content-Length", requestBody.toByteArray(StandardCharsets.UTF_8).size.toString())
-            }
-        }
 
-        return try {
-            connection.outputStream.use { output ->
-                output.write(requestBody.toByteArray(StandardCharsets.UTF_8))
+            try {
+                val bodyBytes = variant.requestBody.toByteArray(StandardCharsets.UTF_8)
+                connection.outputStream.use { output ->
+                    output.write(bodyBytes)
+                }
+                val responseStream = if (connection.responseCode in 200..299) {
+                    connection.inputStream
+                } else {
+                    connection.errorStream
+                } ?: throw IllegalStateException("Vicohome request failed with HTTP ${connection.responseCode}")
+                val response = readAll(responseStream)
+                recordTokenArtifacts("XM action $action @ $baseUrl (${variant.bodyLabel})", connection.headerFields, response)
+                return response
+            } catch (exception: Exception) {
+                lastFailure = exception
+            } finally {
+                connection.disconnect()
             }
-            val responseStream = if (connection.responseCode in 200..299) {
-                connection.inputStream
-            } else {
-                connection.errorStream
-            } ?: throw IllegalStateException("Vicohome request failed with HTTP ${connection.responseCode}")
-            val response = readAll(responseStream)
-            recordTokenArtifacts("XM action $action @ $baseUrl", connection.headerFields, response)
-            response
-        } finally {
-            connection.disconnect()
         }
+        throw lastFailure ?: IllegalStateException("Vicohome request failed ($action @ $baseUrl)")
+    }
     }
 
     private enum class TokenHeaderMode {
@@ -476,6 +495,12 @@ class VicohomeClient(
     private data class XmLoginVariant(
         val action: String,
         val payload: JSONObject,
+    )
+
+    private data class XmRequestVariant(
+        val contentType: String,
+        val requestBody: String,
+        val bodyLabel: String,
     )
 
     private fun updatePrivacyConsent(
