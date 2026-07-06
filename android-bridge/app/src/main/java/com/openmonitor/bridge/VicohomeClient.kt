@@ -179,6 +179,8 @@ class VicohomeClient(
         onProgress: (String) -> Unit = {},
     ): String {
         val hostCandidates = (region.authBaseCandidates + region.apiBaseCandidates).distinct()
+        val bootstrapToken = TokenHarvestStore.latestDecodedTokenFromSource("Baseus auth")
+            ?: accountLogin.authToken
         val loginVariants = listOf(
             XmLoginVariant(
                 action = "UserLoginXn",
@@ -235,7 +237,7 @@ class VicohomeClient(
                         action = variant.action,
                         payload = variant.payload,
                         region = region,
-                        token = null,
+                        token = bootstrapToken,
                     )
                     val responseObject = JSONObject(response)
                     val resultCode = responseObject.optInt("code", responseObject.optInt("result", -1))
