@@ -180,8 +180,8 @@ class VicohomeClient(
     ): String {
         val hostCandidates = (region.authBaseCandidates + region.apiBaseCandidates).distinct()
         val bootstrapTokens = listOfNotNull(
+            TokenHarvestStore.latestDecodedTokenFromSource("Baseus auth"),
             accountLogin.authToken.takeIf { it.isNotBlank() },
-            TokenHarvestStore.latestTokenFromSource("Baseus auth"),
             TokenHarvestStore.latestTokenWithNote("account token"),
         ).distinct()
         val loginVariants = listOf(

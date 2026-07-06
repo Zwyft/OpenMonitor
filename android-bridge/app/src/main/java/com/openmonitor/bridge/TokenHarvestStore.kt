@@ -94,6 +94,15 @@ object TokenHarvestStore {
         }
     }
 
+    fun latestDecodedTokenFromSource(sourcePrefix: String): String? {
+        return synchronized(lock) {
+            entries.asReversed()
+                .firstOrNull { it.source.startsWith(sourcePrefix, ignoreCase = true) && !it.token.contains('%') }
+                ?.token
+                ?: entries.asReversed().firstOrNull { it.source.startsWith(sourcePrefix, ignoreCase = true) }?.token
+        }
+    }
+
     fun latestTokenWithNote(notePrefix: String): String? {
         return synchronized(lock) {
             entries.asReversed().firstOrNull { it.note.startsWith(notePrefix, ignoreCase = true) }?.token
