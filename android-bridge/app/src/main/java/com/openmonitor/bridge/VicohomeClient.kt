@@ -305,6 +305,35 @@ class VicohomeClient(
                 for (headerMode in headerModes) {
                     try {
                         onProgress("Trying Baseus device host $baseUrl")
+                        val response = getXmAction(
+                            baseUrl = baseUrl,
+                            action = "GetUserDeviceList",
+                            region = region,
+                            token = token,
+                            headerMode = headerMode,
+                        )
+                        val responseObject = JSONObject(response)
+                        val resultCode = responseObject.optInt("code", responseObject.optInt("result", 0))
+                        if (resultCode != 0) {
+                            val message = responseObject.optString("msg", responseObject.optString("message", "unknown error"))
+                            throw IllegalStateException("Device list request failed (${region.label} @ $baseUrl): $message")
+                        }
+
+                        TokenHarvestStore.recordFromText("Baseus device list response", response)
+                        sawSuccessfulResponse = true
+                        val devices = parseDeviceList(responseObject)
+                        if (devices.isNotEmpty()) {
+                            onProgress("Baseus device host $baseUrl returned ${devices.size} device(s)")
+                            return devices
+                        }
+                        lastEmptyShape = describeDeviceListShape(responseObject)
+                        onProgress("Baseus device host $baseUrl returned no devices: $lastEmptyShape")
+                    } catch (exception: Exception) {
+                        lastFailure = exception
+                        onProgress("Baseus device host $baseUrl failed: ${exception.message ?: "unknown error"}")
+                    }
+                    try {
+                        onProgress("Trying Baseus device host $baseUrl via POST fallback")
                         val response = postXmAction(
                             baseUrl = baseUrl,
                             action = "GetUserDeviceList",
@@ -419,6 +448,59 @@ class VicohomeClient(
         }
         throw lastFailure ?: IllegalStateException("Vicohome request failed ($action @ $baseUrl)")
     }
+
+    private fun getXmAction(
+        baseUrl: String,
+        action: String,
+        region: VicohomeRegion,
+        token: String? = null,
+        headerMode: TokenHeaderMode = TokenHeaderMode.BOTH,
+    ): String {
+        var lastFailure: Exception? = null
+        for (queryShape in listOf(emptyMap<String, String>(), mapOf("action" to action))) {
+            val timestamp = System.currentTimeMillis()
+            val requestUrl = buildRequestUrl(baseUrl, "", queryShape)
+            val connection = (URL(requestUrl).openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 5000
+                readTimeout = 7000
+                setRequestProperty("User-Agent", buildXmUserAgent())
+                setRequestProperty("Timestamp", timestamp.toString())
+                setRequestProperty("Version", BASEUS_XM_SERVICE_VERSION)
+                setRequestProperty("SecretId", BASEUS_XM_APP_KEY)
+                setRequestProperty("Signature", buildXmSignature(timestamp))
+                setRequestProperty("RequestId", UUID.randomUUID().toString())
+                setRequestProperty("Action", action)
+                if (!token.isNullOrBlank()) {
+                    when (headerMode) {
+                        TokenHeaderMode.BOTH -> {
+                            setRequestProperty("Authorization", token)
+                            setRequestProperty("auth", token)
+                        }
+                        TokenHeaderMode.AUTH_ONLY -> setRequestProperty("auth", token)
+                        TokenHeaderMode.AUTHORIZATION_ONLY -> setRequestProperty("Authorization", token)
+                    }
+                }
+                setRequestProperty("Lang", "en")
+                setRequestProperty("Accept", "application/json")
+            }
+
+            try {
+                val responseStream = if (connection.responseCode in 200..299) {
+                    connection.inputStream
+                } else {
+                    connection.errorStream
+                } ?: throw IllegalStateException("Vicohome request failed with HTTP ${connection.responseCode}")
+                val response = readAll(responseStream)
+                recordTokenArtifacts("XM GET action $action @ $baseUrl", connection.headerFields, response)
+                return response
+            } catch (exception: Exception) {
+                lastFailure = exception
+            } finally {
+                connection.disconnect()
+            }
+        }
+        throw lastFailure ?: IllegalStateException("Vicohome request failed ($action @ $baseUrl)")
     }
 
     private enum class TokenHeaderMode {
