@@ -154,6 +154,13 @@ class VicohomeClient(
                 val accountInfoObject = data.optJSONObject("accountInfo") ?: throw IllegalStateException("Login failed (${region.label} @ $baseUrl): accountInfo missing")
                 val auth = data.optString("auth").orEmpty()
                 require(auth.isNotBlank()) { "Login failed (${region.label} @ $baseUrl): auth token missing" }
+                val xmTokenHint = firstNonBlank(
+                    data.optString("access_token").orEmpty(),
+                    data.optString("accessToken").orEmpty(),
+                    data.optString("xm_token").orEmpty(),
+                    data.optJSONObject("payload")?.let { extractXmAccessToken(it) }.orEmpty(),
+                    data.optJSONObject("data")?.let { extractXmAccessToken(it) }.orEmpty(),
+                )
                 val accountLogin = VicohomeAccountLogin(
                     accountInfo = VicohomeAccountInfo(
                         account = accountInfoObject.optString("account").ifBlank { email },
@@ -161,9 +168,13 @@ class VicohomeClient(
                         nickname = accountInfoObject.optString("nickname"),
                     ),
                     authToken = auth,
+                    xmTokenHint = xmTokenHint,
                     pwd = data.optString("pwd").orEmpty(),
                 )
                 TokenHarvestStore.record("Baseus auth", accountLogin.authToken, "account token")
+                if (xmTokenHint.isNotBlank()) {
+                    TokenHarvestStore.record("Baseus auth", xmTokenHint, "xm token hint")
+                }
                 TokenHarvestStore.recordFromText("Baseus auth response", response)
                 return accountLogin
             } catch (exception: Exception) {
@@ -179,7 +190,11 @@ class VicohomeClient(
         onProgress: (String) -> Unit = {},
     ): String {
         val hostCandidates = (region.authBaseCandidates + region.apiBaseCandidates).distinct()
-        val bootstrapToken = TokenHarvestStore.latestDecodedTokenFromSource("Baseus auth")
+        val bootstrapToken = firstNonBlank(
+            TokenHarvestStore.latestDecodedTokenFromSource("Baseus auth"),
+            accountLogin.xmTokenHint,
+            accountLogin.authToken,
+        )
             ?: accountLogin.authToken
         val loginVariants = listOf(
             XmLoginVariant(

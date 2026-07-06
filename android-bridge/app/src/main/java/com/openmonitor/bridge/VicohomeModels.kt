@@ -42,6 +42,7 @@ data class VicohomeSession(
 data class VicohomeAccountLogin(
     val accountInfo: VicohomeAccountInfo,
     val authToken: String,
+    val xmTokenHint: String = "",
     val pwd: String,
 )
 
