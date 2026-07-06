@@ -1,5 +1,8 @@
 package com.openmonitor.bridge
 
+import java.net.URLDecoder
+import java.nio.charset.StandardCharsets
+
 data class TokenHarvestEntry(
     val timestampMillis: Long,
     val source: String,
@@ -24,14 +27,30 @@ object TokenHarvestStore {
         val normalized = token.trim()
         if (normalized.isBlank()) return
         synchronized(lock) {
-            val candidate = TokenHarvestEntry(
-                timestampMillis = System.currentTimeMillis(),
-                source = source,
-                token = normalized,
-                note = note,
-            )
-            if (entries.lastOrNull()?.token != normalized || entries.lastOrNull()?.source != source) {
-                entries = (entries + candidate).takeLast(MAX_ENTRIES)
+            val timestampMillis = System.currentTimeMillis()
+            val candidates = buildList {
+                add(normalized)
+                if (normalized.contains('%')) {
+                    runCatching { URLDecoder.decode(normalized, StandardCharsets.UTF_8.name()) }
+                        .getOrNull()
+                        ?.trim()
+                        ?.takeIf { it.isNotBlank() && it != normalized }
+                        ?.let { add(it) }
+                }
+                normalized.removeSurrounding("\"")
+                    .takeIf { it.isNotBlank() && it != normalized }
+                    ?.let { add(it) }
+            }.distinct()
+            candidates.forEach { candidateToken ->
+                if (entries.lastOrNull()?.token != candidateToken || entries.lastOrNull()?.source != source) {
+                    val candidate = TokenHarvestEntry(
+                        timestampMillis = timestampMillis,
+                        source = source,
+                        token = candidateToken,
+                        note = note,
+                    )
+                    entries = (entries + candidate).takeLast(MAX_ENTRIES)
+                }
             }
         }
         BridgeLogStore.info(
@@ -67,6 +86,18 @@ object TokenHarvestStore {
 
     fun snapshot(limit: Int = MAX_ENTRIES): List<TokenHarvestEntry> {
         return synchronized(lock) { entries.takeLast(limit) }
+    }
+
+    fun latestTokenFromSource(sourcePrefix: String): String? {
+        return synchronized(lock) {
+            entries.asReversed().firstOrNull { it.source.startsWith(sourcePrefix, ignoreCase = true) }?.token
+        }
+    }
+
+    fun latestTokenWithNote(notePrefix: String): String? {
+        return synchronized(lock) {
+            entries.asReversed().firstOrNull { it.note.startsWith(notePrefix, ignoreCase = true) }?.token
+        }
     }
 
     fun exportText(limit: Int = MAX_ENTRIES): String {
