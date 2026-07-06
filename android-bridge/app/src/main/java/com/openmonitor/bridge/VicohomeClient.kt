@@ -29,10 +29,20 @@ class VicohomeClient(
                 onProgress("Logging into Baseus cloud (${region.label})")
                 val accountLogin = loginBaseusAccount(region, onProgress)
                 val privacyConsentUpdated = updatePrivacyConsent(accountLogin.authToken, region, onProgress)
-                val xmToken = loginXmSession(accountLogin, region, onProgress)
+                val xmToken = try {
+                    loginXmSession(accountLogin, region, onProgress)
+                } catch (exception: Exception) {
+                    val fallbackToken = firstNonBlank(accountLogin.xmTokenHint, accountLogin.authToken)
+                    if (fallbackToken.isNotBlank()) {
+                        onProgress("Using Baseus token hint for device access after XM login failed: ${exception.message ?: "unknown error"}")
+                        fallbackToken
+                    } else {
+                        throw exception
+                    }
+                }
                 onProgress("Loading Baseus cloud devices (${region.label})")
                 val devices = listDevices(
-                    tokens = listOf(xmToken, accountLogin.authToken).filter { it.isNotBlank() }.distinct(),
+                    tokens = listOf(xmToken, accountLogin.xmTokenHint, accountLogin.authToken).filter { it.isNotBlank() }.distinct(),
                     region = region,
                     onProgress = onProgress,
                 )
