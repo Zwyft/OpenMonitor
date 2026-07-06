@@ -296,39 +296,43 @@ class VicohomeClient(
         region: VicohomeRegion,
         onProgress: (String) -> Unit = {},
     ): List<VicohomeDevice> {
+        val headerModes = listOf(TokenHeaderMode.BOTH, TokenHeaderMode.AUTH_ONLY, TokenHeaderMode.AUTHORIZATION_ONLY)
         var lastFailure: Exception? = null
         var sawSuccessfulResponse = false
         var lastEmptyShape: String? = null
         for (baseUrl in region.apiBaseCandidates) {
             for (token in tokens) {
-                try {
-                    onProgress("Trying Baseus device host $baseUrl")
-                    val response = postXmAction(
-                        baseUrl = baseUrl,
-                        action = "GetUserDeviceList",
-                        payload = JSONObject(),
-                        region = region,
-                        token = token,
-                    )
-                    val responseObject = JSONObject(response)
-                    val resultCode = responseObject.optInt("code", responseObject.optInt("result", 0))
-                    if (resultCode != 0) {
-                        val message = responseObject.optString("msg", responseObject.optString("message", "unknown error"))
-                        throw IllegalStateException("Device list request failed (${region.label} @ $baseUrl): $message")
-                    }
+                for (headerMode in headerModes) {
+                    try {
+                        onProgress("Trying Baseus device host $baseUrl")
+                        val response = postXmAction(
+                            baseUrl = baseUrl,
+                            action = "GetUserDeviceList",
+                            payload = JSONObject(),
+                            region = region,
+                            token = token,
+                            headerMode = headerMode,
+                        )
+                        val responseObject = JSONObject(response)
+                        val resultCode = responseObject.optInt("code", responseObject.optInt("result", 0))
+                        if (resultCode != 0) {
+                            val message = responseObject.optString("msg", responseObject.optString("message", "unknown error"))
+                            throw IllegalStateException("Device list request failed (${region.label} @ $baseUrl): $message")
+                        }
 
-                    TokenHarvestStore.recordFromText("Baseus device list response", response)
-                    sawSuccessfulResponse = true
-                    val devices = parseDeviceList(responseObject)
-                    if (devices.isNotEmpty()) {
-                        onProgress("Baseus device host $baseUrl returned ${devices.size} device(s)")
-                        return devices
+                        TokenHarvestStore.recordFromText("Baseus device list response", response)
+                        sawSuccessfulResponse = true
+                        val devices = parseDeviceList(responseObject)
+                        if (devices.isNotEmpty()) {
+                            onProgress("Baseus device host $baseUrl returned ${devices.size} device(s)")
+                            return devices
+                        }
+                        lastEmptyShape = describeDeviceListShape(responseObject)
+                        onProgress("Baseus device host $baseUrl returned no devices: $lastEmptyShape")
+                    } catch (exception: Exception) {
+                        lastFailure = exception
+                        onProgress("Baseus device host $baseUrl failed: ${exception.message ?: "unknown error"}")
                     }
-                    lastEmptyShape = describeDeviceListShape(responseObject)
-                    onProgress("Baseus device host $baseUrl returned no devices: $lastEmptyShape")
-                } catch (exception: Exception) {
-                    lastFailure = exception
-                    onProgress("Baseus device host $baseUrl failed: ${exception.message ?: "unknown error"}")
                 }
             }
         }
@@ -347,6 +351,7 @@ class VicohomeClient(
         payload: JSONObject,
         region: VicohomeRegion,
         token: String? = null,
+        headerMode: TokenHeaderMode = TokenHeaderMode.BOTH,
     ): String {
         val requestBody = buildXmFormBody(payload)
         val timestamp = System.currentTimeMillis()
@@ -363,8 +368,14 @@ class VicohomeClient(
             setRequestProperty("RequestId", UUID.randomUUID().toString())
             setRequestProperty("Action", action)
             if (!token.isNullOrBlank()) {
-                setRequestProperty("Authorization", token)
-                setRequestProperty("auth", token)
+                when (headerMode) {
+                    TokenHeaderMode.BOTH -> {
+                        setRequestProperty("Authorization", token)
+                        setRequestProperty("auth", token)
+                    }
+                    TokenHeaderMode.AUTH_ONLY -> setRequestProperty("auth", token)
+                    TokenHeaderMode.AUTHORIZATION_ONLY -> setRequestProperty("Authorization", token)
+                }
             }
             setRequestProperty("Lang", "en")
             setRequestProperty("Content-Type", "application/x-www-form-urlencoded; charset=utf-8")
@@ -389,6 +400,12 @@ class VicohomeClient(
         } finally {
             connection.disconnect()
         }
+    }
+
+    private enum class TokenHeaderMode {
+        BOTH,
+        AUTH_ONLY,
+        AUTHORIZATION_ONLY,
     }
 
     private fun extractXmAccessToken(responseObject: JSONObject): String {
