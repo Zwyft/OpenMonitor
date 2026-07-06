@@ -256,7 +256,7 @@ class VicohomeClient(
                             webrtcApiBaseCandidates = listOf(catalog.globalServer, region.webrtcApiBaseCandidates.firstOrNull().orEmpty(), "https://api-${region.shortName.lowercase(Locale.US)}.vicoo.tech")
                                 .filter { it.isNotBlank() }
                                 .distinct(),
-                            serverCode = catalog.value.ifBlank { region.serverCode },
+                            serverCode = firstNonBlank(catalog.value, region.serverCode),
                         )
                     }
                 } catch (exception: Exception) {
@@ -278,7 +278,6 @@ class VicohomeClient(
             accountLogin.xmTokenHint,
             accountLogin.authToken,
         )
-            ?: accountLogin.authToken
         val loginVariants = listOf(
             XmLoginVariant(
                 action = "UserLoginXn",
