@@ -182,8 +182,10 @@ class VicohomeClient(
                 )
                 TokenHarvestStore.record("Baseus auth", accountLogin.authToken, "account token")
                 TokenHarvestStore.recordFromText("Baseus auth response", response)
-                val responseTokenHint = TokenHarvestStore.latestDecodedTokenFromSource("Baseus auth response")
-                    ?: TokenHarvestStore.latestTokenFromSource("Baseus auth response")
+                val responseTokenHint = firstNonBlank(
+                    TokenHarvestStore.latestDecodedTokenFromSource("Baseus auth response"),
+                    TokenHarvestStore.latestTokenFromSource("Baseus auth response"),
+                )
                 if (responseTokenHint.isNotBlank()) {
                     TokenHarvestStore.record("Baseus auth", responseTokenHint, "xm token hint")
                     return accountLogin.copy(xmTokenHint = responseTokenHint)
