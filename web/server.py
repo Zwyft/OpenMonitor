@@ -30,6 +30,7 @@ ROOT = Path(__file__).resolve().parent
 STATIC_DIR = ROOT / "static"
 RUNTIME_DIR = ROOT / "runtime"
 HLS_DIR = RUNTIME_DIR / "hls"
+BRIDGE_TARGET_FILE = RUNTIME_DIR / "bridge-target.json"
 
 ONVIF_MULTICAST = ("239.255.255.250", 3702)
 COMMON_HTTP_PORTS = [80, 81, 443, 8000, 8080, 8443, 8888, 8899]
@@ -135,6 +136,57 @@ class CameraStore:
                 self._is_refreshing = False
 
         return self.snapshot()
+
+
+class BridgeTargetStore:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._url = ""
+        self._message = "No Android bridge configured yet."
+        self._load()
+
+    def _load(self) -> None:
+        try:
+            if BRIDGE_TARGET_FILE.exists():
+                payload = json.loads(BRIDGE_TARGET_FILE.read_text(encoding="utf-8"))
+                self._url = self._normalize(payload.get("url", ""))
+                self._message = payload.get("message") or self._message
+        except Exception:
+            self._url = ""
+            self._message = "Bridge target config could not be loaded."
+
+    def _save(self) -> None:
+        BRIDGE_TARGET_FILE.parent.mkdir(parents=True, exist_ok=True)
+        BRIDGE_TARGET_FILE.write_text(
+            json.dumps({"url": self._url, "message": self._message}, separators=(",", ":"), ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+    def _normalize(self, url: str) -> str:
+        return url.strip().rstrip("/")
+
+    def snapshot(self) -> dict:
+        with self._lock:
+            return {
+                "url": self._url,
+                "message": self._message,
+                "configured": bool(self._url),
+                "baseUrl": self._url,
+            }
+
+    def update(self, url: str) -> dict:
+        normalized = self._normalize(url)
+        if not normalized:
+            raise ValueError("Bridge URL is required")
+        with self._lock:
+            self._url = normalized
+            self._message = f"Android bridge set to {normalized}"
+            self._save()
+            return self.snapshot()
+
+    def base_url(self) -> str:
+        with self._lock:
+            return self._url
 
 
 class RTSPHLSBridgeManager:
@@ -525,8 +577,40 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self.path = "/index.html"
             return super().do_GET()
 
+        if parsed.path == "/portal":
+            self._write_text(200, "text/html; charset=utf-8", portalPage())
+            return
+
+        if parsed.path == "/api/bridge-target":
+            self._write_json(BRIDGE_TARGET.snapshot())
+            return
+
         if parsed.path == "/api/state":
             self._write_json(self.store.snapshot())
+            return
+
+        if parsed.path == "/api/vicohome/session":
+            self._bridge_proxy_json("/api/vicohome/session")
+            return
+
+        if parsed.path == "/api/vicohome/devices":
+            self._bridge_proxy_json("/api/vicohome/devices")
+            return
+
+        if parsed.path == "/api/vicohome/events":
+            self._bridge_proxy_json("/api/vicohome/events")
+            return
+
+        if parsed.path == "/api/vicohome/live-ticket":
+            self._bridge_proxy_json("/api/vicohome/live-ticket", query=parsed.query)
+            return
+
+        if parsed.path == "/api/vicohome/thing-probe":
+            self._bridge_proxy_json("/api/vicohome/thing-probe")
+            return
+
+        if parsed.path == "/api/vicohome/thing-probe.txt":
+            self._bridge_proxy_text("/api/vicohome/thing-probe.txt", content_type="text/plain; charset=utf-8")
             return
 
         if parsed.path == "/api/scan":
@@ -548,6 +632,26 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self._write_json(bridge)
             return
 
+        if parsed.path == "/api/bridge/session":
+            self._bridge_proxy_json("/api/vicohome/session")
+            return
+
+        if parsed.path == "/api/bridge/devices":
+            self._bridge_proxy_json("/api/vicohome/devices")
+            return
+
+        if parsed.path == "/api/bridge/events":
+            self._bridge_proxy_json("/api/vicohome/events")
+            return
+
+        if parsed.path == "/api/bridge/live-ticket":
+            self._bridge_proxy_json("/api/vicohome/live-ticket", query=parsed.query)
+            return
+
+        if parsed.path == "/api/bridge/thing-probe":
+            self._bridge_proxy_json("/api/vicohome/thing-probe")
+            return
+
         if parsed.path == "/api/proxy":
             self._proxy(parsed)
             return
@@ -560,6 +664,44 @@ class DashboardHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urllib.parse.urlsplit(self.path)
+        if parsed.path == "/api/bridge-target":
+            payload = self._read_json()
+            try:
+                target = BRIDGE_TARGET.update(payload.get("url", ""))
+            except Exception as exc:
+                self.send_error(HTTPStatus.BAD_REQUEST, str(exc))
+                return
+            self._write_json(target, status=HTTPStatus.CREATED)
+            return
+
+        if parsed.path == "/api/vicohome/sync":
+            payload = self._read_json()
+            body = json.dumps(
+                {
+                    "email": payload.get("email", ""),
+                    "password": payload.get("password", ""),
+                    "regionChoice": payload.get("regionChoice", "AUTO"),
+                },
+                separators=(",", ":"),
+                ensure_ascii=False,
+            )
+            self._bridge_proxy_json("/api/vicohome/sync", method="POST", body=body, status_on_success=HTTPStatus.CREATED)
+            return
+
+        if parsed.path == "/api/bridge/sync":
+            payload = self._read_json()
+            body = json.dumps(
+                {
+                    "email": payload.get("email", ""),
+                    "password": payload.get("password", ""),
+                    "regionChoice": payload.get("regionChoice", "AUTO"),
+                },
+                separators=(",", ":"),
+                ensure_ascii=False,
+            )
+            self._bridge_proxy_json("/api/vicohome/sync", method="POST", body=body, status_on_success=HTTPStatus.CREATED)
+            return
+
         if parsed.path == "/api/manual":
             payload = self._read_json()
             endpoint = manual_endpoint_from_payload(payload)
@@ -593,6 +735,14 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _write_text(self, status: HTTPStatus, content_type: str, body: str) -> None:
+        payload = body.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
 
     def _proxy(self, parsed: urllib.parse.SplitResult) -> None:
         query = urllib.parse.parse_qs(parsed.query)
@@ -638,6 +788,84 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             except Exception:
                 pass
 
+    def _bridge_proxy_json(
+        self,
+        path: str,
+        *,
+        method: str = "GET",
+        query: str = "",
+        body: Optional[str] = None,
+        status_on_success: HTTPStatus = HTTPStatus.OK,
+    ) -> None:
+        bridge_url = BRIDGE_TARGET.base_url()
+        if not bridge_url:
+            self.send_error(HTTPStatus.CONFLICT, "No Android bridge URL configured")
+            return
+        url = f"{bridge_url}{path}"
+        if query:
+            url = f"{url}?{query}"
+        try:
+            response = request_http(
+                method,
+                url,
+                timeout=HTTP_TIMEOUT,
+                request_headers={"Content-Type": "application/json"} if body is not None else None,
+                body=body.encode("utf-8") if body is not None else None,
+            )
+        except Exception as exc:
+            self.send_error(HTTPStatus.BAD_GATEWAY, str(exc))
+            return
+
+        try:
+            response_body = response.read().decode("utf-8", errors="ignore")
+            self.send_response(status_on_success)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store, max-age=0")
+            self.end_headers()
+            self.wfile.write(response_body.encode("utf-8"))
+        finally:
+            try:
+                response.close()
+            except Exception:
+                pass
+
+    def _bridge_proxy_text(
+        self,
+        path: str,
+        *,
+        method: str = "GET",
+        query: str = "",
+        body: Optional[str] = None,
+        content_type: str = "text/plain; charset=utf-8",
+    ) -> None:
+        bridge_url = BRIDGE_TARGET.base_url()
+        if not bridge_url:
+            self.send_error(HTTPStatus.CONFLICT, "No Android bridge URL configured")
+            return
+        url = f"{bridge_url}{path}"
+        if query:
+            url = f"{url}?{query}"
+        try:
+            response = request_http(
+                method,
+                url,
+                timeout=HTTP_TIMEOUT,
+                request_headers={"Content-Type": "application/json"} if body is not None else None,
+                body=body.encode("utf-8") if body is not None else None,
+            )
+        except Exception as exc:
+            self.send_error(HTTPStatus.BAD_GATEWAY, str(exc))
+            return
+
+        try:
+            response_body = response.read().decode("utf-8", errors="ignore")
+            self._write_text(HTTPStatus.OK, content_type, response_body)
+        finally:
+            try:
+                response.close()
+            except Exception:
+                pass
+
     def _serve_hls_file(self, path: str) -> None:
         relative_path = path[len("/hls/"):]
         file_path = (HLS_DIR / relative_path).resolve()
@@ -666,6 +894,626 @@ class RoutedHTTPServer(ThreadingHTTPServer):
 
 
 BRIDGE_MANAGER: RTSPHLSBridgeManager
+BRIDGE_TARGET: BridgeTargetStore
+
+
+def portalPage() -> str:
+    return """
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpenMonitor Baseus Portal</title>
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background:
+        radial-gradient(circle at top left, rgba(110, 212, 199, 0.16), transparent 25%),
+        radial-gradient(circle at 90% 10%, rgba(225, 184, 79, 0.14), transparent 22%),
+        linear-gradient(160deg, #071014, #091219 55%, #050b0f);
+      color: #e8f2f3;
+    }
+    .shell { max-width: 1240px; margin: 0 auto; padding: 20px; }
+    .card {
+      background: rgba(11, 19, 24, 0.88);
+      border: 1px solid rgba(171, 189, 196, 0.16);
+      border-radius: 22px;
+      padding: 18px;
+      box-shadow: 0 24px 80px rgba(0, 0, 0, 0.42);
+      backdrop-filter: blur(14px);
+    }
+    .grid { display: grid; grid-template-columns: 1fr 1.1fr; gap: 18px; }
+    .stack { display: grid; gap: 12px; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .row-3 { display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 12px; }
+    .buttons { display: flex; flex-wrap: wrap; gap: 10px; }
+    .hero { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; margin-bottom: 14px; }
+    h1, h2, h3 { margin: 0; font-weight: 650; letter-spacing: -0.02em; }
+    h1 { font-size: 30px; }
+    .muted { color: #97abb1; }
+    .tiny {
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      font-size: 11px;
+      color: #97abb1;
+      font-family: "SFMono-Regular", "Menlo", monospace;
+    }
+    .pill {
+      display: inline-flex; align-items: center; justify-content: center;
+      padding: 8px 12px; border-radius: 999px;
+      border: 1px solid rgba(225, 184, 79, 0.24);
+      background: rgba(225, 184, 79, 0.12);
+      color: #ffe3a1; font-size: 12px; font-family: "SFMono-Regular", "Menlo", monospace;
+    }
+    label { display: grid; gap: 8px; }
+    input, select, button {
+      border-radius: 14px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: rgba(255, 255, 255, 0.04);
+      color: #e8f2f3;
+      font: inherit;
+      padding: 12px 14px;
+    }
+    button {
+      cursor: pointer;
+      background: linear-gradient(180deg, rgba(225, 184, 79, 0.28), rgba(225, 184, 79, 0.12));
+      color: #ffe3a1;
+    }
+    button.secondary { background: rgba(255, 255, 255, 0.05); color: #e8f2f3; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .video-wrap { margin-top: 12px; border-radius: 20px; overflow: hidden; border: 1px solid rgba(255,255,255,0.08); background: #000; min-height: 280px; }
+    video { width: 100%; display: block; background: #000; }
+    pre {
+      white-space: pre-wrap; word-break: break-word;
+      background: rgba(11, 18, 32, 0.88);
+      border-radius: 16px; padding: 14px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      max-height: 260px; overflow: auto; margin: 0;
+    }
+    a { color: #7dd3fc; }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <div class="card">
+      <div class="hero">
+        <div>
+          <div class="tiny">OpenMonitor / Android bridge</div>
+          <h1>Baseus browser portal</h1>
+          <p class="muted">Set the Android bridge URL once, sync the Baseus account here, and stream live video in the browser.</p>
+        </div>
+        <div class="pill" id="bridgeSessionBadge">No session</div>
+      </div>
+
+      <div class="grid">
+        <div class="stack">
+          <div class="card" style="background: rgba(255,255,255,0.03);">
+            <div class="tiny">Bridge target</div>
+            <div class="row">
+              <label>
+                <span class="muted">Android bridge URL</span>
+                <input id="bridgeUrlInput" placeholder="http://192.168.4.25:18480">
+              </label>
+              <div style="display:grid; align-content:end;">
+                <button id="saveBridgeUrlButton" class="secondary">Save bridge URL</button>
+              </div>
+            </div>
+            <div class="muted" id="bridgeUrlStatus" style="margin-top:10px;">—</div>
+          </div>
+
+          <div class="card" style="background: rgba(255,255,255,0.03);">
+            <div class="tiny">Baseus login</div>
+            <div class="row">
+              <label><span class="muted">Email</span><input id="bridgeEmailInput" autocomplete="username"></label>
+              <label><span class="muted">Password</span><input id="bridgePasswordInput" type="password" autocomplete="current-password"></label>
+            </div>
+            <div class="row">
+              <label>
+                <span class="muted">Region</span>
+                <select id="bridgeRegionSelect">
+                  <option value="AUTO">Auto (US then EU)</option>
+                  <option value="US">US</option>
+                  <option value="EU">EU</option>
+                </select>
+              </label>
+              <div style="display:grid; align-content:end;">
+                <button id="syncBridgeButton">Sync Baseus cloud</button>
+              </div>
+            </div>
+            <div class="muted" id="bridgeSyncStatus" style="margin-top:10px;">Enter credentials and sync.</div>
+          </div>
+
+          <div class="card" style="background: rgba(255,255,255,0.03);">
+            <div class="tiny">Session + devices</div>
+            <div class="row-3">
+              <div><div class="muted">Session</div><div id="bridgeSessionText" style="margin-top:4px;">No session loaded.</div></div>
+              <div><div class="muted">Devices</div><div id="bridgeDeviceCount" style="margin-top:4px;">0</div></div>
+              <div><div class="muted">Probe</div><div id="bridgeProbeState" style="margin-top:4px;">Idle</div></div>
+            </div>
+            <div class="buttons" style="margin-top:12px;">
+              <button id="refreshBridgeButton" class="secondary">Refresh devices</button>
+              <button id="probeBridgeButton" class="secondary">Probe Thing RTC</button>
+            </div>
+            <div class="stack" style="margin-top:12px;">
+              <label><span class="muted">Manual target</span><input id="manualTargetInput" placeholder="Serial or 192.168.4.25"></label>
+              <label>
+                <span class="muted">Camera</span>
+                <select id="deviceSelect"><option value="">No devices loaded yet</option></select>
+              </label>
+            </div>
+            <div class="buttons" style="margin-top:12px;">
+              <button id="useManualButton" class="secondary">Use manual target</button>
+              <button id="startButton">Start live</button>
+              <button id="stopButton" class="secondary" disabled>Stop</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="stack">
+          <div class="card" style="background: rgba(255,255,255,0.03);">
+            <div class="tiny">Live viewer</div>
+            <div class="video-wrap"><video id="liveVideo" autoplay muted playsinline controls></video></div>
+            <div style="margin-top:12px;"><div class="muted">Status</div><pre id="statusLog">Idle.</pre></div>
+          </div>
+          <div class="card" style="background: rgba(255,255,255,0.03);">
+            <div class="tiny">Debug outputs</div>
+            <div class="stack">
+              <div><div class="muted">Session JSON</div><pre id="sessionJson">—</pre></div>
+              <div><div class="muted">Thing probe</div><pre id="probeJson">—</pre></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <p class="muted" style="margin-top:14px;">This page talks to the Android bridge through the local web server. Save the bridge URL once, then sync and watch live from the browser.</p>
+      <p><a href="/">Back to local dashboard</a></p>
+    </div>
+  </div>
+
+  <script>
+  (function () {
+    var bridgeUrlInput = document.getElementById("bridgeUrlInput");
+    var saveBridgeUrlButton = document.getElementById("saveBridgeUrlButton");
+    var bridgeUrlStatus = document.getElementById("bridgeUrlStatus");
+    var bridgeEmailInput = document.getElementById("bridgeEmailInput");
+    var bridgePasswordInput = document.getElementById("bridgePasswordInput");
+    var bridgeRegionSelect = document.getElementById("bridgeRegionSelect");
+    var syncBridgeButton = document.getElementById("syncBridgeButton");
+    var bridgeSyncStatus = document.getElementById("bridgeSyncStatus");
+    var bridgeSessionBadge = document.getElementById("bridgeSessionBadge");
+    var bridgeSessionText = document.getElementById("bridgeSessionText");
+    var bridgeDeviceCount = document.getElementById("bridgeDeviceCount");
+    var bridgeProbeState = document.getElementById("bridgeProbeState");
+    var refreshBridgeButton = document.getElementById("refreshBridgeButton");
+    var probeBridgeButton = document.getElementById("probeBridgeButton");
+    var deviceSelect = document.getElementById("deviceSelect");
+    var manualTargetInput = document.getElementById("manualTargetInput");
+    var useManualButton = document.getElementById("useManualButton");
+    var startButton = document.getElementById("startButton");
+    var stopButton = document.getElementById("stopButton");
+    var statusLog = document.getElementById("statusLog");
+    var sessionJson = document.getElementById("sessionJson");
+    var probeJson = document.getElementById("probeJson");
+    var liveVideo = document.getElementById("liveVideo");
+    var signalSocket = null;
+    var peerConnection = null;
+    var dataChannel = null;
+    var signalQueue = [];
+    var currentTicket = null;
+    var currentSerial = "";
+    var keepaliveTimer = null;
+    var pollingTimer = null;
+
+    function log(message) {
+      statusLog.textContent = "[" + new Date().toLocaleTimeString() + "] " + message + "\n" + statusLog.textContent;
+    }
+
+    function requestJSON(method, url, body, callback) {
+      var xhr = new XMLHttpRequest();
+      xhr.open(method, url, true);
+      xhr.onreadystatechange = function () {
+        if (xhr.readyState !== 4) return;
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try { callback(null, JSON.parse(xhr.responseText || "{}")); }
+          catch (error) { callback(error); }
+        } else {
+          var message = xhr.responseText || xhr.statusText || ("HTTP " + xhr.status);
+          try {
+            var parsedError = JSON.parse(xhr.responseText || "{}");
+            message = parsedError.message || message;
+          } catch (error) {}
+          callback(new Error(message));
+        }
+      };
+      if (body) xhr.setRequestHeader("Content-Type", "application/json");
+      xhr.send(body ? JSON.stringify(body) : null);
+    }
+
+    function loadBridgeTarget() {
+      requestJSON("GET", "/api/bridge-target", null, function (error, response) {
+        if (error) {
+          bridgeUrlStatus.textContent = error.message;
+          return;
+        }
+        bridgeUrlInput.value = response.url || "";
+        bridgeUrlStatus.textContent = response.message || "Bridge target loaded.";
+      });
+    }
+
+    function saveBridgeTarget() {
+      var url = bridgeUrlInput.value.trim();
+      if (!url) {
+        bridgeUrlStatus.textContent = "Enter the bridge URL first.";
+        return;
+      }
+      requestJSON("POST", "/api/bridge-target", { url: url }, function (error, response) {
+        if (error) {
+          bridgeUrlStatus.textContent = error.message;
+          return;
+        }
+        bridgeUrlStatus.textContent = response.message || "Bridge target saved.";
+        loadBridgeData();
+      });
+    }
+
+    function syncBridge() {
+      var email = bridgeEmailInput.value.trim();
+      var password = bridgePasswordInput.value.trim();
+      var regionChoice = bridgeRegionSelect.value;
+      if (!email || !password) {
+        bridgeSyncStatus.textContent = "Enter email and password first.";
+        return;
+      }
+      syncBridgeButton.disabled = true;
+      bridgeSyncStatus.textContent = "Syncing Baseus cloud…";
+      log("Baseus cloud sync requested for " + email);
+      requestJSON("POST", "/api/vicohome/sync", { email: email, password: password, regionChoice: regionChoice }, function (error, response) {
+        syncBridgeButton.disabled = false;
+        if (error) {
+          bridgeSyncStatus.textContent = error.message;
+          log("Sync failed: " + error.message);
+          return;
+        }
+        bridgeSyncStatus.textContent = response.message || "Baseus cloud synced.";
+        sessionJson.textContent = JSON.stringify(response.session || {}, null, 2);
+        loadBridgeData();
+        log(response.message || "Baseus cloud synced.");
+      });
+    }
+
+    function loadSession() {
+      requestJSON("GET", "/api/vicohome/session", null, function (error, response) {
+        if (error) {
+          bridgeSessionBadge.textContent = "Session error";
+          bridgeSessionText.textContent = error.message;
+          return;
+        }
+        bridgeSessionBadge.textContent = response.available ? "Session ready" : "No session";
+        bridgeSessionText.textContent = response.message || "No session loaded.";
+        sessionJson.textContent = JSON.stringify(response, null, 2);
+      });
+    }
+
+    function loadDevices() {
+      requestJSON("GET", "/api/vicohome/devices", null, function (error, response) {
+        if (error) {
+          log("Device load failed: " + error.message);
+          return;
+        }
+        var devices = response.entries || [];
+        bridgeDeviceCount.textContent = String(devices.length);
+        deviceSelect.innerHTML = "";
+        if (!devices.length) {
+          var emptyOption = document.createElement("option");
+          emptyOption.value = "";
+          emptyOption.textContent = "No cloud devices loaded yet";
+          deviceSelect.appendChild(emptyOption);
+          return;
+        }
+        for (var i = 0; i < devices.length; i += 1) {
+          var device = devices[i];
+          var option = document.createElement("option");
+          option.value = device.serialNumber || "";
+          option.textContent = (device.deviceName || device.serialNumber || "Camera") + " • " + (device.modelNo || "unknown model");
+          deviceSelect.appendChild(option);
+        }
+        if (!deviceSelect.value && devices[0]) {
+          deviceSelect.value = devices[0].serialNumber || "";
+        }
+      });
+    }
+
+    function loadThingProbe() {
+      requestJSON("GET", "/api/vicohome/thing-probe", null, function (error, response) {
+        if (error) {
+          bridgeProbeState.textContent = error.message;
+          return;
+        }
+        bridgeProbeState.textContent = response.summary || "Idle";
+        probeJson.textContent = JSON.stringify(response, null, 2);
+      });
+    }
+
+    function loadBridgeData() {
+      loadSession();
+      loadDevices();
+      loadThingProbe();
+    }
+
+    function stopLive() {
+      if (keepaliveTimer) {
+        window.clearInterval(keepaliveTimer);
+        keepaliveTimer = null;
+      }
+      if (signalSocket) {
+        try { signalSocket.close(); } catch (error) {}
+      }
+      if (dataChannel) {
+        try { dataChannel.close(); } catch (error) {}
+      }
+      if (peerConnection) {
+        try { peerConnection.close(); } catch (error) {}
+      }
+      signalSocket = null;
+      peerConnection = null;
+      dataChannel = null;
+      signalQueue = [];
+      currentTicket = null;
+      currentSerial = "";
+      liveVideo.srcObject = null;
+      startButton.disabled = false;
+      stopButton.disabled = true;
+      log("Live session stopped");
+    }
+
+    function flushSignalQueue() {
+      if (!signalSocket || signalSocket.readyState !== WebSocket.OPEN) return;
+      while (signalQueue.length) {
+        signalSocket.send(signalQueue.shift());
+      }
+    }
+
+    function sendSignal(message) {
+      var payload = JSON.stringify(message);
+      if (!signalSocket || signalSocket.readyState !== WebSocket.OPEN) {
+        signalQueue.push(payload);
+        return;
+      }
+      signalSocket.send(payload);
+    }
+
+    function startKeepalive() {
+      if (keepaliveTimer) {
+        window.clearInterval(keepaliveTimer);
+        keepaliveTimer = null;
+      }
+      var intervalSeconds = currentTicket && currentTicket.signalPingInterval ? currentTicket.signalPingInterval : 5;
+      keepaliveTimer = window.setInterval(function () {
+        sendSignal({ method: "PING", timestamp: Date.now() });
+      }, Math.max(2, intervalSeconds) * 1000);
+    }
+
+    function base64Encode(text) { return btoa(text); }
+
+    function normalizeSignalUrl(signalServer, websocketPath) {
+      var url;
+      try { url = new URL(signalServer); } catch (error) { return signalServer; }
+      if (url.protocol === "https:") url.protocol = "wss:";
+      else if (url.protocol === "http:") url.protocol = "ws:";
+      if (websocketPath && websocketPath.length) {
+        url.pathname = websocketPath.charAt(0) === "/" ? websocketPath : "/" + websocketPath;
+      }
+      return url.toString();
+    }
+
+    function mapIceServers(iceServerList) {
+      var mapped = [];
+      for (var i = 0; i < iceServerList.length; i += 1) {
+        var entry = iceServerList[i];
+        if (!entry || !entry.url) continue;
+        mapped.push({ urls: entry.url, username: entry.username || "", credential: entry.credential || "" });
+      }
+      return mapped;
+    }
+
+    function sendAuth() {
+      sendSignal({
+        method: "AUTH",
+        clientType: "app",
+        status: "normal",
+        accessToken: currentTicket.accessToken || currentTicket.id,
+        id: currentTicket.id
+      });
+    }
+
+    function sendJoinLive() {
+      sendSignal({
+        method: "JOIN_LIVE",
+        role: "viewer",
+        name: currentTicket.id,
+        group: currentTicket.groupId,
+        traceId: currentTicket.traceId,
+        recipientClientId: currentSerial
+      });
+    }
+
+    function sendOffer(offer) {
+      sendSignal({
+        method: "TRANSMIT",
+        messageType: "SDP_OFFER",
+        messagePayload: base64Encode(JSON.stringify({ type: "offer", sdp: offer.sdp })),
+        mode: "vicoo",
+        recipientClientId: currentSerial,
+        senderClientId: currentTicket.id,
+        sessionId: currentTicket.id,
+        viewerType: "a4x_sdk",
+        resolution: "1280x720",
+        version: "0.0.1"
+      });
+    }
+
+    function sendIceCandidate(candidate) {
+      if (!candidate) return;
+      sendSignal({
+        method: "TRANSMIT",
+        messageType: "ICE_CANDIDATE",
+        messagePayload: base64Encode(JSON.stringify({
+          sdpMid: candidate.sdpMid || "",
+          sdpMLineIndex: typeof candidate.sdpMLineIndex === "number" ? candidate.sdpMLineIndex : 0,
+          candidate: candidate.candidate || ""
+        })),
+        recipientClientId: currentSerial,
+        senderClientId: currentTicket.id,
+        sessionId: currentTicket.id,
+        version: "0.0.1"
+      });
+    }
+
+    function handleSignalMessage(raw) {
+      var message = raw || {};
+      if (message.method === "AUTH_RESPONSE") {
+        if (message.code == null || message.code === 0 || message.code === "0") {
+          log("Authenticated with cloud signal server");
+          startKeepalive();
+          sendJoinLive();
+        } else {
+          log("Auth failed: " + (message.message || ("code " + message.code)));
+          stopLive();
+        }
+        return;
+      }
+      if (message.method === "PEER_IN") {
+        log("Camera peer connected; creating offer");
+        peerConnection.createOffer().then(function (offer) {
+          return peerConnection.setLocalDescription(offer).then(function () {
+            sendOffer(offer);
+          });
+        }).catch(function (error) { log("Offer error: " + error.message); });
+        return;
+      }
+      if (message.method === "PEER_OUT") {
+        log("Camera peer left the session");
+        stopLive();
+        return;
+      }
+      if (message.method === "TRANSMIT" && message.messageType === "SDP_ANSWER") {
+        try {
+          var decoded = JSON.parse(atob(message.messagePayload || ""));
+          peerConnection.setRemoteDescription({ type: "answer", sdp: decoded.sdp }).then(function () {
+            log("Remote SDP answer applied");
+          }).catch(function (error) { log("Failed to apply SDP answer: " + error.message); });
+        } catch (error) {
+          log("Failed to decode SDP answer: " + error.message);
+        }
+        return;
+      }
+    }
+
+    function startLive() {
+      var serial = deviceSelect.value || manualTargetInput.value.trim() || "";
+      if (!serial) {
+        log("Select a camera first");
+        return;
+      }
+      var manualIp = manualTargetInput.value.trim();
+      if (manualIp && manualIp === serial && serial.indexOf(".") === -1) {
+        manualIp = "";
+      }
+      stopLive();
+      startButton.disabled = true;
+      stopButton.disabled = false;
+      currentSerial = serial;
+      log("Requesting cloud live ticket for " + serial);
+      var ticketUrl = "/api/vicohome/live-ticket?serial=" + encodeURIComponent(serial);
+      if (manualIp) {
+        ticketUrl += "&ip=" + encodeURIComponent(manualIp);
+      }
+      requestJSON("GET", ticketUrl, null, function (error, response) {
+        if (error) {
+          log("Live ticket error: " + error.message);
+          startButton.disabled = false;
+          stopButton.disabled = true;
+          return;
+        }
+        currentTicket = response.ticket || response;
+        if (!currentTicket || !currentTicket.signalServer) {
+          log((response && response.message) ? response.message : "Live ticket missing signal server");
+          startButton.disabled = false;
+          stopButton.disabled = true;
+          return;
+        }
+        log("Ticket loaded for " + serial + " via " + (response.region || "unknown region"));
+        peerConnection = new RTCPeerConnection({ iceServers: mapIceServers(currentTicket.iceServer || []) });
+        peerConnection.onicecandidate = function (event) { if (event.candidate) sendIceCandidate(event.candidate); };
+        peerConnection.ontrack = function (event) {
+          if (!event.track || event.track.kind !== "video") return;
+          var stream = event.streams && event.streams.length ? event.streams[0] : new MediaStream([event.track]);
+          liveVideo.srcObject = stream;
+          liveVideo.play().catch(function (playError) { log("Video autoplay error: " + playError.message); });
+          log("Remote video track received");
+        };
+        try {
+          dataChannel = peerConnection.createDataChannel(serial);
+          dataChannel.onopen = function () {
+            log("Data channel open; requesting live start");
+            dataChannel.send(JSON.stringify({
+              action: "startLive",
+              requestID: String(Date.now()),
+              connectionID: "",
+              timeStamp: String(Date.now()),
+              size: "medium",
+              resolution: "1280x720"
+            }));
+          };
+        } catch (error) {
+          log("Data channel error: " + error.message);
+        }
+        try {
+          peerConnection.addTransceiver("audio", { direction: "sendrecv" });
+          peerConnection.addTransceiver("video", { direction: "recvonly" });
+        } catch (error) {
+          log("Transceiver setup warning: " + error.message);
+        }
+        signalSocket = new WebSocket(normalizeSignalUrl(currentTicket.signalServer, currentTicket.websocketPath));
+        signalSocket.onopen = function () {
+          log("Signal socket open");
+          sendAuth();
+          flushSignalQueue();
+        };
+        signalSocket.onmessage = function (event) {
+          try { handleSignalMessage(JSON.parse(event.data)); }
+          catch (error) { log("Signal parse error: " + error.message); }
+        };
+        signalSocket.onclose = function () {
+          log("Signal socket closed");
+          if (keepaliveTimer) {
+            window.clearInterval(keepaliveTimer);
+            keepaliveTimer = null;
+          }
+        };
+        signalSocket.onerror = function () { log("Signal socket error"); };
+      });
+    }
+
+    saveBridgeUrlButton.onclick = saveBridgeTarget;
+    syncBridgeButton.onclick = syncBridge;
+    refreshBridgeButton.onclick = loadBridgeData;
+    probeBridgeButton.onclick = loadThingProbe;
+    useManualButton.onclick = function () { deviceSelect.value = manualTargetInput.value.trim(); };
+    startButton.onclick = startLive;
+    stopButton.onclick = stopLive;
+
+    loadBridgeTarget();
+    loadBridgeData();
+    pollingTimer = window.setInterval(loadBridgeData, 5000);
+  })();
+  </script>
+</body>
+</html>
+    """.strip()
 
 
 def endpoint_from_payload(payload: dict, source: str = "Manual") -> CameraEndpoint:
@@ -783,8 +1631,14 @@ def tcp_port_open(host: str, port: int, timeout: float) -> bool:
         return False
 
 
-def open_http(url: str, timeout: float = HTTP_TIMEOUT, request_headers: Optional[dict] = None):
-    request = urllib.request.Request(url, method="GET")
+def request_http(
+    method: str,
+    url: str,
+    timeout: float = HTTP_TIMEOUT,
+    request_headers: Optional[dict] = None,
+    body: Optional[bytes] = None,
+):
+    request = urllib.request.Request(url, data=body, method=method.upper())
     for key, value in (request_headers or {}).items():
         if value:
             request.add_header(key, value)
@@ -798,6 +1652,10 @@ def open_http(url: str, timeout: float = HTTP_TIMEOUT, request_headers: Optional
 
     context = ssl._create_unverified_context() if parsed.scheme == "https" else None
     return urllib.request.urlopen(request, timeout=timeout, context=context)
+
+
+def open_http(url: str, timeout: float = HTTP_TIMEOUT, request_headers: Optional[dict] = None):
+    return request_http("GET", url, timeout=timeout, request_headers=request_headers)
 
 
 def fetch_http(url: str, timeout: float = HTTP_TIMEOUT, request_headers: Optional[dict] = None) -> dict:
@@ -995,7 +1853,7 @@ def merge_endpoints(existing: CameraEndpoint, replacement: CameraEndpoint) -> Ca
 
 
 def main() -> None:
-    global BRIDGE_MANAGER
+    global BRIDGE_MANAGER, BRIDGE_TARGET
 
     parser = argparse.ArgumentParser(description="OpenMonitor browser dashboard")
     parser.add_argument("--host", default="0.0.0.0")
@@ -1004,6 +1862,7 @@ def main() -> None:
 
     store = CameraStore()
     BRIDGE_MANAGER = RTSPHLSBridgeManager()
+    BRIDGE_TARGET = BridgeTargetStore()
     threading.Thread(target=store.refresh, kwargs={"deep_scan": False}, daemon=True).start()
 
     server = RoutedHTTPServer((args.host, args.port), DashboardHandler, store)

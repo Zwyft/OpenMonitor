@@ -367,15 +367,12 @@ class MainActivity : AppCompatActivity() {
         Thread {
             try {
                 val regionChoice = VicohomeRegionChoice.entries[vicohomeRegionSpinner.selectedItemPosition.coerceIn(0, VicohomeRegionChoice.entries.lastIndex)]
-                val client = VicohomeClient(email, password, regionChoice)
-                val result = client.syncRecentData { progress ->
+                val result = VicohomeSyncCoordinator.sync(email, password, regionChoice) { progress ->
                     BridgeLogStore.info(progress)
                     runOnUiThread {
                         scanStatusView.text = progress
                     }
                 }
-                VicohomeDataStore.update(result)
-                result.session?.let { VicohomeSessionStore.update(it) }
                 runOnUiThread {
                     scanStatusView.text = result.message
                     maybePrefillThingRtcTarget(result.devices)

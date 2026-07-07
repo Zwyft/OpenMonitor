@@ -8,6 +8,7 @@ import java.net.Socket
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
+import org.json.JSONObject
 
 class BridgeHttpServer(
     private val cacheRoot: File,
@@ -58,7 +59,8 @@ class BridgeHttpServer(
             val path = rawPath.substringBefore("?")
             val query = rawPath.substringAfter("?", "")
 
-            consumeHeaders(input)
+            val headers = readHeaders(input)
+            val body = if (method == "POST") readBody(input, headers["content-length"]?.toIntOrNull() ?: 0) else ""
 
             when {
                 method == "GET" && path == "/" -> respondText(output, 200, "text/html; charset=utf-8", rootPage())
@@ -76,6 +78,7 @@ class BridgeHttpServer(
                 method == "GET" && path == "/api/vicohome/live-ticket" -> respondText(output, liveTicketStatus(query), "application/json; charset=utf-8", liveTicketJson(query))
                 method == "GET" && path == "/api/vicohome/thing-probe" -> respondText(output, 200, "application/json; charset=utf-8", thingProbeJson())
                 method == "GET" && path == "/api/vicohome/thing-probe.txt" -> respondDownload(output, "text/plain; charset=utf-8", "openmonitor-thing-rtc-probe.txt", thingProbeText())
+                method == "POST" && path == "/api/vicohome/sync" -> respondText(output, 200, "application/json; charset=utf-8", vicohomeSyncJson(body))
                 method == "GET" && path.startsWith("/hls/") -> serveFile(output, path.removePrefix("/hls/"))
                 else -> respondText(output, 404, "text/plain; charset=utf-8", "Not found")
             }
@@ -219,11 +222,29 @@ class BridgeHttpServer(
         output.flush()
     }
 
-    private fun consumeHeaders(input: BufferedInputStream) {
+    private fun readHeaders(input: BufferedInputStream): Map<String, String> {
+        val headers = linkedMapOf<String, String>()
         while (true) {
             val line = input.readLineUtf8() ?: break
             if (line.isEmpty()) break
+            val separator = line.indexOf(':')
+            if (separator > 0) {
+                headers[line.substring(0, separator).trim().lowercase()] = line.substring(separator + 1).trim()
+            }
         }
+        return headers
+    }
+
+    private fun readBody(input: BufferedInputStream, contentLength: Int): String {
+        if (contentLength <= 0) return ""
+        val bytes = ByteArray(contentLength)
+        var offset = 0
+        while (offset < contentLength) {
+            val read = input.read(bytes, offset, contentLength - offset)
+            if (read <= 0) break
+            offset += read
+        }
+        return String(bytes, 0, offset, StandardCharsets.UTF_8)
     }
 
     private fun BufferedInputStream.readLineUtf8(): String? {
@@ -346,9 +367,40 @@ class BridgeHttpServer(
             append(session?.region?.webrtcApiBase.orEmpty().jsonEscape())
             append("\",\"serviceCatalogCount\":")
             append(session?.serviceCatalogEntries?.size ?: 0)
-            append("\",\"updatedAtMillis\":")
+            append(",\"updatedAtMillis\":")
             append(session?.updatedAtMillis ?: 0L)
             append('}')
+        }
+    }
+
+    private fun vicohomeSyncJson(body: String): String {
+        val payload = if (body.isBlank()) JSONObject() else JSONObject(body)
+        val email = payload.optString("email").trim()
+        val password = payload.optString("password").trim()
+        val regionChoice = payload.optString("regionChoice", "AUTO").trim().uppercase()
+        if (email.isBlank() || password.isBlank()) {
+            return errorJson("Missing email or password.")
+        }
+        val choice = runCatching { VicohomeRegionChoice.valueOf(regionChoice) }.getOrDefault(VicohomeRegionChoice.AUTO)
+        return try {
+            val result = VicohomeSyncCoordinator.sync(email, password, choice) { progress ->
+                BridgeLogStore.info("Bridge sync: $progress")
+            }
+            buildString {
+                append('{')
+                append("\"message\":\"")
+                append(result.message.jsonEscape())
+                append("\",\"session\":")
+                append(vicohomeSessionJson())
+                append(",\"devices\":")
+                append(vicohomeDevicesJson())
+                append(",\"events\":")
+                append(vicohomeEventsJson())
+                append('}')
+            }
+        } catch (exception: Exception) {
+            BridgeLogStore.error("Bridge sync failed: ${exception.stackTraceToString()}")
+            errorJson(exception.message ?: "Vicohome sync failed")
         }
     }
 
