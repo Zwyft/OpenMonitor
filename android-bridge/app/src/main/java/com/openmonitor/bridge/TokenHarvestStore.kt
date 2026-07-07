@@ -17,9 +17,9 @@ object TokenHarvestStore {
     private var entries = emptyList<TokenHarvestEntry>()
 
     private val tokenKeyRegexes = listOf(
-        Regex("""(?i)\b(access_token|accessToken|xm_token|auth|authorization|bearer)\b\s*[:=]\s*["']?([A-Za-z0-9._\-+/=]{8,})["']?"""),
+        Regex("""(?i)\b(access_token|accessToken|xm_token|xm_host|xm_host_code|xm_app_id|auth|authorization|bearer)\b\s*[:=]\s*["']?([A-Za-z0-9._\-+/=]{8,})["']?"""),
         Regex("""(?i)\bBearer\s+([A-Za-z0-9._\-+/=]{16,})"""),
-        Regex("""(?i)\b(xm_token|access_token|accessToken|auth)\b[^A-Za-z0-9._\-+/=]{0,12}([A-Za-z0-9._\-+/=]{8,})"""),
+        Regex("""(?i)\b(xm_token|xm_host|xm_host_code|xm_app_id|access_token|accessToken|auth)\b[^A-Za-z0-9._\-+/=]{0,12}([A-Za-z0-9._\-+/=]{8,})"""),
         Regex("""\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b"""),
     )
 

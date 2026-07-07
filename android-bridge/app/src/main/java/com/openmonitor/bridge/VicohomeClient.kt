@@ -942,6 +942,14 @@ class VicohomeClient(
             accountLogin.xmTokenHint,
             accountLogin.authToken,
         )
+        loginThingSession(
+            accountLogin = accountLogin,
+            region = region,
+            serviceCatalogEntries = serviceCatalogEntries,
+            hostCandidates = hostCandidates,
+            bootstrapToken = bootstrapToken,
+            onProgress = onProgress,
+        )?.let { return it }
         val loginVariants = listOf(
             XmLoginVariant(
                 action = "UserLoginXn",
@@ -1022,6 +1030,140 @@ class VicohomeClient(
             }
         }
         throw lastFailure ?: IllegalStateException("XM session login failed (${region.label})")
+    }
+
+    private fun loginThingSession(
+        accountLogin: VicohomeAccountLogin,
+        region: VicohomeRegion,
+        serviceCatalogEntries: List<VicohomeServiceCatalog>,
+        hostCandidates: List<String>,
+        bootstrapToken: String,
+        onProgress: (String) -> Unit = {},
+    ): String? {
+        val tokenSeedCandidates = buildList {
+            add(accountLogin.xmTokenHint)
+            add(accountLogin.authToken)
+            add(bootstrapToken)
+        }.mapNotNull { it.trim().takeIf { token -> token.isNotBlank() } }.distinct()
+        val loginTokenFlags = listOf(0, 1)
+        val thingLoginActions = listOf(
+            ThingLoginAction(
+                label = "thing.m.user.email.password.login",
+                tokenCreateAction = "thing.m.user.email.token.create",
+                tokenCreatePayload = JSONObject()
+                    .put("countryCode", region.loginCountryCode)
+                    .put("email", email),
+                loginAction = "thing.m.user.email.password.login",
+                loginPayloadFactory = { loginToken, encryptFlag ->
+                    JSONObject()
+                        .put("countryCode", region.loginCountryCode)
+                        .put("email", email)
+                        .put("passwd", password)
+                        .put("token", loginToken)
+                        .put("ifencrypt", encryptFlag)
+                },
+            ),
+            ThingLoginAction(
+                label = "thing.m.user.uid.password.login",
+                tokenCreateAction = "thing.m.user.uid.token.create",
+                tokenCreatePayload = JSONObject()
+                    .put("countryCode", region.loginCountryCode)
+                    .put("uid", accountLogin.accountInfo.accountId.toString()),
+                loginAction = "thing.m.user.uid.password.login",
+                loginPayloadFactory = { loginToken, encryptFlag ->
+                    JSONObject()
+                        .put("countryCode", region.loginCountryCode)
+                        .put("uid", accountLogin.accountInfo.accountId.toString())
+                        .put("passwd", password)
+                        .put("token", loginToken)
+                        .put("ifencrypt", encryptFlag)
+                },
+            ),
+        )
+
+        for (baseUrl in hostCandidates) {
+            for (thingLoginAction in thingLoginActions) {
+                val loginTokenCandidates = mutableListOf<String>()
+                try {
+                    onProgress("Trying Baseus Thing token seed at $baseUrl (${thingLoginAction.tokenCreateAction})")
+                    val tokenCreateResponse = postXmAction(
+                        baseUrl = baseUrl,
+                        action = thingLoginAction.tokenCreateAction,
+                        payload = thingLoginAction.tokenCreatePayload,
+                        region = region,
+                        token = null,
+                        headerMode = TokenHeaderMode.NONE,
+                        domainNameHeader = "host_domain",
+                    )
+                    TokenHarvestStore.recordFromText("Baseus Thing token create", tokenCreateResponse)
+                    val tokenCreateObject = JSONObject(tokenCreateResponse)
+                    val tokenCreateCode = tokenCreateObject.optInt("code", tokenCreateObject.optInt("result", -1))
+                    if (tokenCreateCode == 0) {
+                        firstNonBlank(
+                            extractXmAccessToken(tokenCreateObject),
+                            tokenCreateObject.optJSONObject("data")?.optString("token").orEmpty(),
+                            tokenCreateObject.optJSONObject("payload")?.optString("token").orEmpty(),
+                        ).takeIf { it.isNotBlank() }?.let { loginTokenCandidates += it }
+                    } else {
+                        onProgress("Thing token seed at $baseUrl returned code $tokenCreateCode")
+                    }
+                } catch (exception: Exception) {
+                    onProgress("Thing token seed failed at $baseUrl: ${exception.message ?: "unknown error"}")
+                }
+
+                loginTokenCandidates.addAll(tokenSeedCandidates)
+                val uniqueLoginTokenCandidates = loginTokenCandidates.distinct().ifEmpty { listOf(password) }
+                if (uniqueLoginTokenCandidates.isNotEmpty()) {
+                    loginTokenCandidates.clear()
+                    loginTokenCandidates.addAll(uniqueLoginTokenCandidates)
+                }
+
+                for (loginToken in loginTokenCandidates) {
+                    for (encryptFlag in loginTokenFlags) {
+                        try {
+                            onProgress("Trying Baseus Thing session host $baseUrl (${thingLoginAction.label}, encrypt=$encryptFlag)")
+                            val response = postXmAction(
+                                baseUrl = baseUrl,
+                                action = thingLoginAction.loginAction,
+                                payload = thingLoginAction.loginPayloadFactory(loginToken, encryptFlag),
+                                region = region,
+                                token = null,
+                                headerMode = TokenHeaderMode.NONE,
+                                domainNameHeader = "host_domain",
+                            )
+                            TokenHarvestStore.recordFromText("Baseus Thing session", response, note = thingLoginAction.label)
+                            val responseObject = JSONObject(response)
+                            val resultCode = responseObject.optInt("code", responseObject.optInt("result", -1))
+                            if (resultCode != 0) {
+                                val message = responseObject.optString("msg", responseObject.optString("message", "unknown error"))
+                                throw IllegalStateException("Thing login failed (${region.label} @ $baseUrl, ${thingLoginAction.label}, encrypt=$encryptFlag): $message")
+                            }
+                            val token = extractXmAccessToken(responseObject)
+                            if (token.isNotBlank()) {
+                                TokenHarvestStore.record("Baseus Thing session", token, thingLoginAction.label)
+                                onProgress("Baseus Thing session token acquired from $baseUrl (${thingLoginAction.label})")
+                                return token
+                            }
+                            val sidToken = firstNonBlank(
+                                responseObject.optJSONObject("data")?.optString("sid").orEmpty(),
+                                responseObject.optJSONObject("data")?.optString("publicSession").orEmpty(),
+                                responseObject.optString("sid").orEmpty(),
+                            )
+                            if (sidToken.isNotBlank()) {
+                                TokenHarvestStore.record("Baseus Thing session", sidToken, "${thingLoginAction.label} sid")
+                                onProgress("Baseus Thing session SID acquired from $baseUrl (${thingLoginAction.label})")
+                                return sidToken
+                            }
+                            throw IllegalStateException("Thing login returned no access token: ${response.take(240)}")
+                        } catch (exception: Exception) {
+                            onProgress("Thing login attempt failed at $baseUrl (${thingLoginAction.label}, encrypt=$encryptFlag): ${exception.message ?: "unknown error"}")
+                        }
+                    }
+                }
+            }
+        }
+
+        return null
     }
 
     private fun listDevices(
@@ -1180,6 +1322,7 @@ class VicohomeClient(
                 setRequestProperty("Action", action)
                 if (!token.isNullOrBlank()) {
                     when (headerMode) {
+                        TokenHeaderMode.NONE -> Unit
                         TokenHeaderMode.BOTH -> {
                             setRequestProperty("Authorization", token)
                             setRequestProperty("auth", token)
@@ -1250,6 +1393,7 @@ class VicohomeClient(
                 setRequestProperty("Action", action)
                 if (!token.isNullOrBlank()) {
                     when (headerMode) {
+                        TokenHeaderMode.NONE -> Unit
                         TokenHeaderMode.BOTH -> {
                             setRequestProperty("Authorization", token)
                             setRequestProperty("auth", token)
@@ -1287,6 +1431,7 @@ class VicohomeClient(
     }
 
     private enum class TokenHeaderMode {
+        NONE,
         BOTH,
         AUTH_ONLY,
         AUTHORIZATION_ONLY,
@@ -1360,6 +1505,14 @@ class VicohomeClient(
     private data class XmLoginVariant(
         val action: String,
         val payload: JSONObject,
+    )
+
+    private data class ThingLoginAction(
+        val label: String,
+        val tokenCreateAction: String,
+        val tokenCreatePayload: JSONObject,
+        val loginAction: String,
+        val loginPayloadFactory: (String, Int) -> JSONObject,
     )
 
     private data class XmRequestVariant(
