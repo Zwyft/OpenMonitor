@@ -315,10 +315,18 @@ class VicohomeClient(
             tokenSource = firstNonBlank(
                 if (session.xmToken.isNotBlank()) "session.xmToken" else "",
                 if (session.accountAuthToken.isNotBlank()) "session.accountAuthToken" else "",
-                if (TokenHarvestStore.latestDecodedTokenFromSource("Baseus auth response").isNotBlank()) "Baseus auth response (decoded)" else "",
-                if (TokenHarvestStore.latestTokenFromSource("Baseus auth response").isNotBlank()) "Baseus auth response" else "",
-                if (TokenHarvestStore.latestDecodedTokenFromSource("Baseus auth").isNotBlank()) "Baseus auth (decoded)" else "",
-                if (TokenHarvestStore.latestTokenFromSource("Baseus auth").isNotBlank()) "Baseus auth" else "",
+                TokenHarvestStore.latestDecodedTokenFromSource("Baseus auth response").let {
+                    if (it.isNotBlank()) "Baseus auth response (decoded)" else ""
+                },
+                TokenHarvestStore.latestTokenFromSource("Baseus auth response").let {
+                    if (it.isNotBlank()) "Baseus auth response" else ""
+                },
+                TokenHarvestStore.latestDecodedTokenFromSource("Baseus auth").let {
+                    if (it.isNotBlank()) "Baseus auth (decoded)" else ""
+                },
+                TokenHarvestStore.latestTokenFromSource("Baseus auth").let {
+                    if (it.isNotBlank()) "Baseus auth" else ""
+                },
             ),
             attempts = attempts,
             message = message,
@@ -355,7 +363,9 @@ class VicohomeClient(
         val requestUrl = buildThingApiUrl(baseUrl)
         val requestBody = when (bodyVariant) {
             ThingProbeBodyVariant.FORM -> buildThingFormBody(envelope)
-            ThingProbeBodyVariant.JSON -> JSONObject(envelope).toString()
+            ThingProbeBodyVariant.JSON -> JSONObject().apply {
+                envelope.forEach { (key, value) -> put(key, value) }
+            }.toString()
         }
         val headers = linkedMapOf(
             "User-Agent" to buildThingUserAgent(),
