@@ -1040,13 +1040,13 @@ class VicohomeClient(
         bootstrapToken: String,
         onProgress: (String) -> Unit = {},
     ): String? {
-        val tokenSeedCandidates = buildList {
-            add(accountLogin.xmTokenHint)
-            add(accountLogin.authToken)
-            add(bootstrapToken)
-        }.mapNotNull { candidate ->
-            candidate?.trim()?.takeIf { token -> token.isNotBlank() }
-        }.distinct()
+        val tokenSeedCandidates = mutableListOf<String>()
+        for (candidate in listOf(accountLogin.xmTokenHint, accountLogin.authToken, bootstrapToken)) {
+            val normalizedCandidate = candidate.trim()
+            if (normalizedCandidate.isNotBlank()) {
+                tokenSeedCandidates += normalizedCandidate
+            }
+        }
         val loginTokenFlags = listOf(0, 1)
         val thingLoginActions = listOf(
             ThingLoginAction(
@@ -1114,11 +1114,12 @@ class VicohomeClient(
                 }
 
                 loginTokenCandidates.addAll(tokenSeedCandidates)
-                val uniqueLoginTokenCandidates = loginTokenCandidates.distinct().ifEmpty { listOf(password) }
-                if (uniqueLoginTokenCandidates.isNotEmpty()) {
-                    loginTokenCandidates.clear()
-                    loginTokenCandidates.addAll(uniqueLoginTokenCandidates)
+                val uniqueLoginTokenCandidates = loginTokenCandidates.distinct().toMutableList()
+                if (uniqueLoginTokenCandidates.isEmpty()) {
+                    uniqueLoginTokenCandidates.add(password)
                 }
+                loginTokenCandidates.clear()
+                loginTokenCandidates.addAll(uniqueLoginTokenCandidates)
 
                 for (loginToken in loginTokenCandidates) {
                     for (encryptFlag in loginTokenFlags) {
