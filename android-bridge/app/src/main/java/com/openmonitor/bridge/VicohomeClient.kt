@@ -199,6 +199,14 @@ class VicohomeClient(
         var bestSummary = ""
         var latestSessionTid = ""
         var foundUsefulProbe = false
+        val probeToken = firstNonBlank(
+            session.xmToken,
+            session.accountAuthToken,
+            TokenHarvestStore.latestDecodedTokenFromSource("Baseus auth response"),
+            TokenHarvestStore.latestTokenFromSource("Baseus auth response"),
+            TokenHarvestStore.latestDecodedTokenFromSource("Baseus auth"),
+            TokenHarvestStore.latestTokenFromSource("Baseus auth"),
+        )
 
         if (tokenCandidates.isEmpty()) {
             onProgress("Thing RTC probe has no token candidates yet; using anonymous probe requests")
@@ -221,6 +229,7 @@ class VicohomeClient(
                         ctId = "",
                         includeBizDm = false,
                         extraPostData = JSONObject().put("devId", targetIdentity),
+                        token = probeToken,
                         targetIdentity = targetIdentity,
                         tokenLabel = tokenLabel,
                         bodyVariant = bodyVariant,
@@ -243,6 +252,7 @@ class VicohomeClient(
                         ctId = probeCtId,
                         includeBizDm = true,
                         extraPostData = JSONObject().put("devId", targetIdentity),
+                        token = probeToken,
                         targetIdentity = targetIdentity,
                         tokenLabel = tokenLabel,
                         bodyVariant = bodyVariant,
@@ -282,6 +292,7 @@ class VicohomeClient(
                         ctId = configCtId,
                         includeBizDm = true,
                         extraPostData = JSONObject().put("devId", targetIdentity),
+                        token = probeToken,
                         targetIdentity = targetIdentity,
                         tokenLabel = tokenLabel,
                         bodyVariant = bodyVariant,
@@ -341,6 +352,7 @@ class VicohomeClient(
         ctId: String,
         includeBizDm: Boolean,
         extraPostData: JSONObject,
+        token: String,
         targetIdentity: String,
         tokenLabel: String,
         bodyVariant: ThingProbeBodyVariant,
@@ -373,6 +385,10 @@ class VicohomeClient(
                 ThingProbeBodyVariant.JSON -> "application/json; charset=utf-8"
             },
         )
+        if (token.isNotBlank()) {
+            headers["auth"] = token
+            headers["Authorization"] = token
+        }
         val connection = (URL(requestUrl).openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 5000
@@ -383,6 +399,10 @@ class VicohomeClient(
             setRequestProperty("Domain-Name", headers["Domain-Name"].orEmpty())
             setRequestProperty("Connection", headers["Connection"].orEmpty())
             setRequestProperty("Content-Type", headers["Content-Type"].orEmpty())
+            if (token.isNotBlank()) {
+                setRequestProperty("auth", token)
+                setRequestProperty("Authorization", token)
+            }
             if (requestBody.isNotBlank()) {
                 setRequestProperty("Content-Length", requestBody.toByteArray(StandardCharsets.UTF_8).size.toString())
             }
