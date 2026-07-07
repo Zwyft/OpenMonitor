@@ -289,6 +289,64 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
+            android:text="Thing RTC probe"
+            android:textColor="#CBD5E1"
+            android:textStyle="bold" />
+
+        <EditText
+            android:id="@+id/thingRtcTargetInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:hint="Thing RTC target serial / IP / name"
+            android:inputType="text"
+            android:textColor="#E2E8F0"
+            android:textColorHint="#64748B"
+            android:backgroundTint="#38BDF8" />
+
+        <TextView
+            android:id="@+id/thingRtcProbeStatusValue"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:textColor="#94A3B8"
+            android:textSize="14sp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/thingRtcProbeButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Probe Thing RTC" />
+
+            <Button
+                android:id="@+id/copyThingRtcProbeButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="12dp"
+                android:layout_weight="1"
+                android:text="Copy probe output" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/thingRtcProbeValue"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:fontFamily="monospace"
+            android:textColor="#CBD5E1"
+            android:textSize="12sp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
             android:text="Token harvest"
             android:textColor="#CBD5E1"
             android:textStyle="bold" />

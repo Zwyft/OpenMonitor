@@ -12,6 +12,7 @@ import android.os.Handler
 import android.os.Looper
 import android.text.Editable
 import android.text.TextWatcher
+import android.provider.Settings
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
@@ -35,6 +36,13 @@ class MainActivity : AppCompatActivity() {
     private lateinit var vicohomeEmailInput: EditText
     private lateinit var vicohomePasswordInput: EditText
     private lateinit var vicohomeRegionSpinner: Spinner
+    private lateinit var thingRtcTargetInput: EditText
+    private lateinit var thingRtcProbeStatusView: TextView
+    private lateinit var thingRtcProbeValue: TextView
+    private lateinit var thingRtcProbeButton: Button
+    private lateinit var copyThingRtcProbeButton: Button
+    @Volatile
+    private var thingRtcProbeRunning: Boolean = false
     private lateinit var serverView: TextView
     private lateinit var hlsView: TextView
     private lateinit var bridgeIdView: TextView
@@ -89,6 +97,11 @@ class MainActivity : AppCompatActivity() {
         vicohomeEmailInput = findViewById(R.id.vicohomeEmailInput)
         vicohomePasswordInput = findViewById(R.id.vicohomePasswordInput)
         vicohomeRegionSpinner = findViewById(R.id.vicohomeRegionSpinner)
+        thingRtcTargetInput = findViewById(R.id.thingRtcTargetInput)
+        thingRtcProbeStatusView = findViewById(R.id.thingRtcProbeStatusValue)
+        thingRtcProbeValue = findViewById(R.id.thingRtcProbeValue)
+        thingRtcProbeButton = findViewById(R.id.thingRtcProbeButton)
+        copyThingRtcProbeButton = findViewById(R.id.copyThingRtcProbeButton)
         serverView = findViewById(R.id.serverValue)
         hlsView = findViewById(R.id.hlsValue)
         bridgeIdView = findViewById(R.id.bridgeIdValue)
@@ -122,6 +135,8 @@ class MainActivity : AppCompatActivity() {
         vpnStartButton.setOnClickListener { startVpnCapture() }
         vpnStopButton.setOnClickListener { stopVpnCapture() }
         vicohomeButton.setOnClickListener { syncVicohome() }
+        thingRtcProbeButton.setOnClickListener { probeThingRtc() }
+        copyThingRtcProbeButton.setOnClickListener { copyThingRtcProbe() }
         probeTokenPrefsButton.setOnClickListener { probeBaseusPrefs() }
         copyTokenCandidatesButton.setOnClickListener { copyTokenCandidates() }
         startButton.setOnClickListener { startBridge() }
@@ -363,7 +378,9 @@ class MainActivity : AppCompatActivity() {
                 result.session?.let { VicohomeSessionStore.update(it) }
                 runOnUiThread {
                     scanStatusView.text = result.message
+                    maybePrefillThingRtcTarget(result.devices)
                     renderVicohomeEntries()
+                    renderThingRtcProbe()
                 }
             } catch (exception: Exception) {
                 BridgeLogStore.error("Baseus cloud sync failed: ${exception.stackTraceToString()}")
@@ -403,6 +420,7 @@ class MainActivity : AppCompatActivity() {
         renderLogs()
         renderCameraCandidates()
         renderVicohomeEntries()
+        renderThingRtcProbe()
         renderTokenHarvest()
         renderProxyCapture()
         renderVpnCapture()
@@ -490,6 +508,13 @@ class MainActivity : AppCompatActivity() {
                         openBaseusLive(device.serialNumber, device.ip)
                     }
                 })
+                vicohomeContainer.addView(Button(this).apply {
+                    text = "Probe Thing RTC"
+                    setOnClickListener {
+                        thingRtcTargetInput.setText(device.serialNumber.ifBlank { device.ip.ifBlank { device.deviceName } })
+                        probeThingRtc()
+                    }
+                })
             }
         }
 
@@ -522,6 +547,22 @@ class MainActivity : AppCompatActivity() {
                 setTextColor(0xFF94A3B8.toInt())
             })
         }
+
+    }
+
+    private fun renderThingRtcProbe() {
+        val probe = ThingRtcProbeStore.snapshot()
+        if (!thingRtcProbeRunning) {
+            thingRtcProbeStatusView.text = when (probe) {
+                null -> "No Thing RTC probe yet."
+                else -> probe.message.ifBlank { probe.summaryLine() }
+            }
+            thingRtcProbeValue.text = probe?.previewText(4) ?: "No Thing RTC probe yet."
+        } else if (thingRtcProbeValue.text.isNullOrBlank() || thingRtcProbeValue.text == "No Thing RTC probe yet.") {
+            thingRtcProbeValue.text = "Probing Thing RTC..."
+        }
+        copyThingRtcProbeButton.isEnabled = probe != null
+        thingRtcProbeButton.isEnabled = VicohomeSessionStore.snapshot() != null && !thingRtcProbeRunning
     }
 
     private fun renderTokenHarvest() {
@@ -595,6 +636,90 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun probeThingRtc() {
+        val session = VicohomeSessionStore.snapshot()
+        if (session == null) {
+            thingRtcProbeStatusView.text = "Sync Baseus cloud data first."
+            Toast.makeText(this, "Sync Baseus cloud data first.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val rawTarget = thingRtcTargetInput.text?.toString().orEmpty().trim()
+        val resolvedTarget = resolveThingRtcTarget(rawTarget)
+        val targetSerial = resolvedTarget?.serialNumber?.ifBlank { rawTarget }.orEmpty().ifBlank { rawTarget }
+        val targetIp = resolvedTarget?.ip?.ifBlank { "" }.orEmpty().ifBlank {
+            if (isIpv4Address(rawTarget)) rawTarget else ""
+        }
+        val targetName = resolvedTarget?.deviceName?.ifBlank { rawTarget }.orEmpty().ifBlank { rawTarget }
+        val clientDeviceId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID).orEmpty()
+        thingRtcProbeRunning = true
+        thingRtcProbeButton.isEnabled = false
+        thingRtcProbeStatusView.text = "Probing Thing RTC..."
+        BridgeLogStore.info("Thing RTC probe requested for ${targetName.ifBlank { targetSerial.ifBlank { targetIp } }}")
+        Thread {
+            try {
+                val client = VicohomeClient("", "")
+                val result = client.probeThingRtc(
+                    session = session,
+                    targetSerialNumber = targetSerial,
+                    targetIp = targetIp,
+                    targetName = targetName,
+                    clientDeviceId = clientDeviceId,
+                ) { progress ->
+                    BridgeLogStore.info(progress)
+                    runOnUiThread {
+                        thingRtcProbeStatusView.text = progress
+                    }
+                }
+                ThingRtcProbeStore.update(result)
+                runOnUiThread {
+                    thingRtcProbeStatusView.text = result.message
+                    renderThingRtcProbe()
+                }
+            } catch (exception: Exception) {
+                BridgeLogStore.error("Thing RTC probe failed: ${exception.stackTraceToString()}")
+                runOnUiThread {
+                    thingRtcProbeStatusView.text = "Thing RTC probe failed: ${exception.message ?: "unknown error"}"
+                }
+            } finally {
+                runOnUiThread {
+                    thingRtcProbeRunning = false
+                    thingRtcProbeButton.isEnabled = true
+                }
+            }
+        }.start()
+    }
+
+    private fun resolveThingRtcTarget(rawTarget: String): VicohomeDevice? {
+        val target = rawTarget.trim()
+        val devices = VicohomeDataStore.snapshotDevices()
+        if (devices.isEmpty()) {
+            return null
+        }
+        if (target.isBlank()) {
+            return devices.firstOrNull()
+        }
+        return devices.firstOrNull { device ->
+            device.serialNumber.equals(target, ignoreCase = true) ||
+                device.ip.equals(target, ignoreCase = true) ||
+                device.deviceName.equals(target, ignoreCase = true) ||
+                device.modelNo.equals(target, ignoreCase = true) ||
+                device.locationName.equals(target, ignoreCase = true)
+        } ?: devices.firstOrNull { device ->
+            target.contains(device.serialNumber, ignoreCase = true) ||
+                target.contains(device.deviceName, ignoreCase = true) ||
+                target.contains(device.ip, ignoreCase = true)
+        }
+    }
+
+    private fun isIpv4Address(value: String): Boolean {
+        val parts = value.trim().split('.')
+        if (parts.size != 4) return false
+        return parts.all { part ->
+            val number = part.toIntOrNull() ?: return false
+            number in 0..255
+        }
+    }
+
     private fun selectedVpnMode(): VpnCaptureMode {
         return VpnCaptureMode.entries.getOrElse(vpnModeSpinner.selectedItemPosition.coerceIn(0, VpnCaptureMode.entries.lastIndex)) {
             VpnCaptureMode.DNS_ONLY
@@ -628,6 +753,21 @@ class MainActivity : AppCompatActivity() {
         clipboard.setPrimaryClip(ClipData.newPlainText("OpenMonitor token candidates", text))
         Toast.makeText(this, "Copied token candidates", Toast.LENGTH_SHORT).show()
         BridgeLogStore.info("Token candidates copied to clipboard")
+    }
+
+    private fun copyThingRtcProbe() {
+        val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+        val text = ThingRtcProbeStore.exportText()
+        clipboard.setPrimaryClip(ClipData.newPlainText("OpenMonitor Thing RTC probe", text))
+        Toast.makeText(this, "Copied Thing RTC probe", Toast.LENGTH_SHORT).show()
+        BridgeLogStore.info("Thing RTC probe copied to clipboard")
+    }
+
+    private fun maybePrefillThingRtcTarget(devices: List<VicohomeDevice>) {
+        if (thingRtcTargetInput.text.isNullOrBlank()) {
+            val firstDevice = devices.firstOrNull() ?: return
+            thingRtcTargetInput.setText(firstDevice.serialNumber.ifBlank { firstDevice.ip.ifBlank { firstDevice.deviceName } })
+        }
     }
 
     private fun probeBaseusPrefs() {
