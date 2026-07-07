@@ -60,6 +60,17 @@ class VicohomeClient(
                         throw exception
                     }
                 }
+                VicohomeSessionStore.update(
+                    VicohomeSession(
+                        email = email,
+                        accountAuthToken = accountLogin.authToken,
+                        xmToken = xmToken,
+                        region = resolvedRegion,
+                        privacyConsentUpdated = privacyConsentUpdated,
+                        serviceCatalogEntries = serviceCatalogEntries,
+                    ),
+                )
+                onProgress("Baseus session cached for ${resolvedRegion.label}")
                 onProgress("Loading Baseus cloud devices (${resolvedRegion.label})")
                 val devices = listDevices(
                     tokens = listOf(xmToken, accountLogin.xmTokenHint, accountLogin.authToken).filter { it.isNotBlank() }.distinct(),
@@ -77,14 +88,7 @@ class VicohomeClient(
                         append(resolvedRegion.label)
                         append(if (privacyConsentUpdated) " with privacy consent updated" else " without privacy consent update")
                     },
-                    session = VicohomeSession(
-                        email = email,
-                        accountAuthToken = accountLogin.authToken,
-                        xmToken = xmToken,
-                        region = resolvedRegion,
-                        privacyConsentUpdated = privacyConsentUpdated,
-                        serviceCatalogEntries = serviceCatalogEntries,
-                    ),
+                    session = VicohomeSessionStore.snapshot(),
                 )
             } catch (exception: Exception) {
                 lastFailure = exception
