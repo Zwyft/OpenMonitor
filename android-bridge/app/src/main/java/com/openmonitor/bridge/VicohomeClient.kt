@@ -315,18 +315,10 @@ class VicohomeClient(
             tokenSource = firstNonBlank(
                 if (session.xmToken.isNotBlank()) "session.xmToken" else "",
                 if (session.accountAuthToken.isNotBlank()) "session.accountAuthToken" else "",
-                TokenHarvestStore.latestDecodedTokenFromSource("Baseus auth response").let {
-                    if (it.isNotBlank()) "Baseus auth response (decoded)" else ""
-                },
-                TokenHarvestStore.latestTokenFromSource("Baseus auth response").let {
-                    if (it.isNotBlank()) "Baseus auth response" else ""
-                },
-                TokenHarvestStore.latestDecodedTokenFromSource("Baseus auth").let {
-                    if (it.isNotBlank()) "Baseus auth (decoded)" else ""
-                },
-                TokenHarvestStore.latestTokenFromSource("Baseus auth").let {
-                    if (it.isNotBlank()) "Baseus auth" else ""
-                },
+                if (TokenHarvestStore.latestDecodedTokenFromSource("Baseus auth response").orEmpty().isNotBlank()) "Baseus auth response (decoded)" else "",
+                if (TokenHarvestStore.latestTokenFromSource("Baseus auth response").orEmpty().isNotBlank()) "Baseus auth response" else "",
+                if (TokenHarvestStore.latestDecodedTokenFromSource("Baseus auth").orEmpty().isNotBlank()) "Baseus auth (decoded)" else "",
+                if (TokenHarvestStore.latestTokenFromSource("Baseus auth").orEmpty().isNotBlank()) "Baseus auth" else "",
             ),
             attempts = attempts,
             message = message,
