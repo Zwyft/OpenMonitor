@@ -36,6 +36,7 @@ data class VicohomeSession(
     val xmToken: String,
     val region: VicohomeRegion,
     val privacyConsentUpdated: Boolean = false,
+    val serviceCatalogEntries: List<VicohomeServiceCatalog> = emptyList(),
     val updatedAtMillis: Long = System.currentTimeMillis(),
 )
 
@@ -193,6 +194,170 @@ data class VicohomeLiveTicket(
     val realCxSerialNumber: String?,
     val countryNo: String?,
 )
+
+data class ThingRtcProbeAttempt(
+    val apiName: String,
+    val baseUrl: String,
+    val requestUrl: String,
+    val requestMethod: String,
+    val requestEnvelope: Map<String, String>,
+    val requestHeaders: Map<String, String>,
+    val responseCode: Int,
+    val responseMessage: String,
+    val responseBody: String,
+    val parsedSummary: String,
+    val parsedFields: Map<String, String>,
+    val updatedAtMillis: Long = System.currentTimeMillis(),
+) {
+    fun summaryLine(): String {
+        return buildString {
+            append(apiName)
+            append(" @ ")
+            append(baseUrl)
+            append(" • ")
+            append(requestMethod)
+            append(" • HTTP ")
+            append(responseCode)
+            if (responseMessage.isNotBlank()) {
+                append(" ")
+                append(responseMessage)
+            }
+            if (parsedSummary.isNotBlank()) {
+                append(" • ")
+                append(parsedSummary)
+            }
+        }
+    }
+}
+
+data class ThingRtcProbeResult(
+    val targetSerialNumber: String,
+    val targetIp: String,
+    val targetName: String,
+    val region: VicohomeRegion,
+    val tokenSource: String,
+    val attempts: List<ThingRtcProbeAttempt>,
+    val message: String,
+    val bestParsedSummary: String,
+    val bestParsedFields: Map<String, String>,
+    val updatedAtMillis: Long = System.currentTimeMillis(),
+) {
+    fun summaryLine(): String {
+        return buildString {
+            append("Thing RTC probe")
+            append(" • ")
+            append(region.label)
+            append(" • ")
+            append(targetName.ifBlank { targetSerialNumber.ifBlank { targetIp.ifBlank { "unknown target" } } })
+            if (bestParsedSummary.isNotBlank()) {
+                append(" • ")
+                append(bestParsedSummary)
+            } else if (message.isNotBlank()) {
+                append(" • ")
+                append(message)
+            }
+        }
+    }
+
+    fun previewText(maxAttempts: Int = 3): String {
+        return buildString {
+            appendLine(summaryLine())
+            appendLine("Target serial: ${targetSerialNumber.ifBlank { "—" }}")
+            appendLine("Target IP: ${targetIp.ifBlank { "—" }}")
+            appendLine("Region: ${region.label}")
+            appendLine("Token source: ${tokenSource.ifBlank { "—" }}")
+            if (bestParsedFields.isNotEmpty()) {
+                appendLine("Parsed fields:")
+                bestParsedFields.forEach { (key, value) ->
+                    appendLine("  $key = $value")
+                }
+            }
+            if (attempts.isNotEmpty()) {
+                appendLine("Attempts:")
+                attempts.take(maxAttempts).forEachIndexed { index, attempt ->
+                    appendLine("  ${index + 1}. ${attempt.summaryLine()}")
+                }
+                if (attempts.size > maxAttempts) {
+                    appendLine("  … +${attempts.size - maxAttempts} more")
+                }
+            }
+            if (message.isNotBlank()) {
+                appendLine("Message: $message")
+            }
+        }.trimEnd()
+    }
+
+    fun toText(): String {
+        return buildString {
+            appendLine(summaryLine())
+            appendLine("Updated: $updatedAtMillis")
+            appendLine("Target serial: ${targetSerialNumber.ifBlank { "—" }}")
+            appendLine("Target IP: ${targetIp.ifBlank { "—" }}")
+            appendLine("Target name: ${targetName.ifBlank { "—" }}")
+            appendLine("Region: ${region.label}")
+            appendLine("Token source: ${tokenSource.ifBlank { "—" }}")
+            appendLine("Message: ${message.ifBlank { "—" }}")
+            if (bestParsedFields.isNotEmpty()) {
+                appendLine("Best parsed fields:")
+                bestParsedFields.forEach { (key, value) ->
+                    appendLine("  $key = $value")
+                }
+            }
+            if (attempts.isNotEmpty()) {
+                appendLine("Attempts:")
+                attempts.forEachIndexed { index, attempt ->
+                    appendLine("---- Attempt ${index + 1} ----")
+                    appendLine(attempt.summaryLine())
+                    appendLine("API: ${attempt.apiName}")
+                    appendLine("Request URL: ${attempt.requestUrl}")
+                    appendLine("Request method: ${attempt.requestMethod}")
+                    appendLine("Request envelope:")
+                    attempt.requestEnvelope.forEach { (key, value) ->
+                        appendLine("  $key = $value")
+                    }
+                    if (attempt.requestHeaders.isNotEmpty()) {
+                        appendLine("Request headers:")
+                        attempt.requestHeaders.forEach { (key, value) ->
+                            appendLine("  $key = $value")
+                        }
+                    }
+                    appendLine("Response code: ${attempt.responseCode}")
+                    appendLine("Response message: ${attempt.responseMessage}")
+                    if (attempt.parsedFields.isNotEmpty()) {
+                        appendLine("Parsed fields:")
+                        attempt.parsedFields.forEach { (key, value) ->
+                            appendLine("  $key = $value")
+                        }
+                    }
+                    appendLine("Response body:")
+                    appendLine(attempt.responseBody.ifBlank { "—" })
+                }
+            }
+        }.trimEnd()
+    }
+}
+
+object ThingRtcProbeStore {
+    private val lock = Any()
+    @Volatile
+    private var result: ThingRtcProbeResult? = null
+
+    fun snapshot(): ThingRtcProbeResult? = result
+
+    fun summary(): String {
+        return snapshot()?.summaryLine() ?: "No Thing RTC probe yet."
+    }
+
+    fun exportText(): String {
+        return snapshot()?.toText() ?: "No Thing RTC probe yet."
+    }
+
+    fun update(value: ThingRtcProbeResult?) {
+        synchronized(lock) {
+            result = value
+        }
+    }
+}
 
 object VicohomeDataStore {
     private val lock = Any()

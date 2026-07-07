@@ -74,6 +74,8 @@ class BridgeHttpServer(
                 method == "GET" && path == "/api/vicohome/devices" -> respondText(output, 200, "application/json; charset=utf-8", vicohomeDevicesJson())
                 method == "GET" && path == "/api/vicohome/events" -> respondText(output, 200, "application/json; charset=utf-8", vicohomeEventsJson())
                 method == "GET" && path == "/api/vicohome/live-ticket" -> respondText(output, liveTicketStatus(query), "application/json; charset=utf-8", liveTicketJson(query))
+                method == "GET" && path == "/api/vicohome/thing-probe" -> respondText(output, 200, "application/json; charset=utf-8", thingProbeJson())
+                method == "GET" && path == "/api/vicohome/thing-probe.txt" -> respondDownload(output, "text/plain; charset=utf-8", "openmonitor-thing-rtc-probe.txt", thingProbeText())
                 method == "GET" && path.startsWith("/hls/") -> serveFile(output, path.removePrefix("/hls/"))
                 else -> respondText(output, 404, "text/plain; charset=utf-8", "Not found")
             }
@@ -117,6 +119,10 @@ class BridgeHttpServer(
                   ${vicohomeListHtml(serverUrl)}
                 </div>
                 <p><a href="${escapeHtml("$serverUrl/live")}">Open Baseus cloud live viewer</a></p>
+                <h2>Thing RTC probe</h2>
+                <div style="background:#0b1220; border-radius:12px; padding:12px; max-height:320px; overflow:auto;">
+                  ${thingProbeHtml(serverUrl)}
+                </div>
                 <h2>Token harvest</h2>
                 <div style="background:#0b1220; border-radius:12px; padding:12px; max-height:220px; overflow:auto;">
                   ${tokenHarvestHtml(serverUrl)}
@@ -133,6 +139,7 @@ class BridgeHttpServer(
                 <pre style="white-space: pre-wrap; word-break: break-word; background:#0b1220; border-radius:12px; padding:12px; max-height:320px; overflow:auto;">${escapeHtml(logsText(40))}</pre>
                 <p><a href="${escapeHtml("$serverUrl/api/logs.txt")}">Download full log file</a></p>
                 <p><a href="${escapeHtml("$serverUrl/api/tokens.txt")}">Download token candidates</a></p>
+                <p><a href="${escapeHtml("$serverUrl/api/vicohome/thing-probe.txt")}">Download Thing RTC probe</a></p>
                 <p class="muted">Use the Android app to start or stop the bridge. Open the HLS URL for RTSP streams or the /live page for Baseus cloud live video from another device on the same Wi‑Fi.</p>
               </div>
             </body>
@@ -337,6 +344,8 @@ class BridgeHttpServer(
             append(session?.region?.apiBase.orEmpty().jsonEscape())
             append("\",\"webrtcApiBase\":\"")
             append(session?.region?.webrtcApiBase.orEmpty().jsonEscape())
+            append("\",\"serviceCatalogCount\":")
+            append(session?.serviceCatalogEntries?.size ?: 0)
             append("\",\"updatedAtMillis\":")
             append(session?.updatedAtMillis ?: 0L)
             append('}')
@@ -540,6 +549,28 @@ class BridgeHttpServer(
         }
     }
 
+    private fun thingProbeHtml(serverUrl: String): String {
+        val probe = ThingRtcProbeStore.snapshot()
+        return buildString {
+            append("<div class=\"muted\">")
+            append(escapeHtml(ThingRtcProbeStore.summary()))
+            append("</div>")
+            append("<p><a href=\"")
+            append(escapeHtml("$serverUrl/api/vicohome/thing-probe"))
+            append("\">Open Thing RTC probe JSON</a></p>")
+            append("<p><a href=\"")
+            append(escapeHtml("$serverUrl/api/vicohome/thing-probe.txt"))
+            append("\">Download Thing RTC probe</a></p>")
+            if (probe == null) {
+                append("<div class=\"muted\">No Thing RTC probe yet.</div>")
+            } else {
+                append("<pre style=\"white-space: pre-wrap; word-break: break-word; margin:0;\">")
+                append(escapeHtml(probe.previewText(3)))
+                append("</pre>")
+            }
+        }
+    }
+
     private fun vicohomeDevicesJson(): String {
         val devices = VicohomeDataStore.snapshotDevices()
         return buildString {
@@ -578,6 +609,26 @@ class BridgeHttpServer(
             }
             append("]}")
         }
+    }
+
+    private fun thingProbeJson(): String {
+        val probe = ThingRtcProbeStore.snapshot()
+        return buildString {
+            append('{')
+            append("\"available\":")
+            append(probe != null)
+            append(",\"message\":\"")
+            append((probe?.message ?: "No Thing RTC probe yet.").jsonEscape())
+            append("\",\"summary\":\"")
+            append((probe?.summaryLine() ?: ThingRtcProbeStore.summary()).jsonEscape())
+            append("\",\"result\":")
+            append(probe?.toJson() ?: "null")
+            append('}')
+        }
+    }
+
+    private fun thingProbeText(): String {
+        return ThingRtcProbeStore.exportText()
     }
 
     private fun vicohomeEventsJson(): String {
@@ -793,6 +844,83 @@ private fun VicohomeLiveTicket.toJson(): String {
         append("\",\"countryNo\":\"")
         append(countryNo.orEmpty().jsonEscape())
         append("\"}")
+    }
+}
+
+private fun ThingRtcProbeResult.toJson(): String {
+    return buildString {
+        append('{')
+        append("\"targetSerialNumber\":\"")
+        append(targetSerialNumber.jsonEscape())
+        append("\",\"targetIp\":\"")
+        append(targetIp.jsonEscape())
+        append("\",\"targetName\":\"")
+        append(targetName.jsonEscape())
+        append("\",\"region\":\"")
+        append(region.label.jsonEscape())
+        append("\",\"tokenSource\":\"")
+        append(tokenSource.jsonEscape())
+        append("\",\"message\":\"")
+        append(message.jsonEscape())
+        append("\",\"bestParsedSummary\":\"")
+        append(bestParsedSummary.jsonEscape())
+        append("\",\"bestParsedFields\":")
+        append(bestParsedFields.toJson())
+        append(",\"attempts\":[")
+        attempts.forEachIndexed { index, attempt ->
+            if (index > 0) append(',')
+            append(attempt.toJson())
+        }
+        append("]")
+        append(",\"updatedAtMillis\":")
+        append(updatedAtMillis)
+        append('}')
+    }
+}
+
+private fun ThingRtcProbeAttempt.toJson(): String {
+    return buildString {
+        append('{')
+        append("\"apiName\":\"")
+        append(apiName.jsonEscape())
+        append("\",\"baseUrl\":\"")
+        append(baseUrl.jsonEscape())
+        append("\",\"requestUrl\":\"")
+        append(requestUrl.jsonEscape())
+        append("\",\"requestMethod\":\"")
+        append(requestMethod.jsonEscape())
+        append("\",\"requestEnvelope\":")
+        append(requestEnvelope.toJson())
+        append(",\"requestHeaders\":")
+        append(requestHeaders.toJson())
+        append(",\"responseCode\":")
+        append(responseCode)
+        append(",\"responseMessage\":\"")
+        append(responseMessage.jsonEscape())
+        append("\",\"responseBody\":\"")
+        append(responseBody.jsonEscape())
+        append("\",\"parsedSummary\":\"")
+        append(parsedSummary.jsonEscape())
+        append("\",\"parsedFields\":")
+        append(parsedFields.toJson())
+        append(",\"updatedAtMillis\":")
+        append(updatedAtMillis)
+        append('}')
+    }
+}
+
+private fun Map<String, String>.toJson(): String {
+    return buildString {
+        append('{')
+        entries.forEachIndexed { index, entry ->
+            if (index > 0) append(',')
+            append("\"")
+            append(entry.key.jsonEscape())
+            append("\":\"")
+            append(entry.value.jsonEscape())
+            append("\"")
+        }
+        append('}')
     }
 }
 

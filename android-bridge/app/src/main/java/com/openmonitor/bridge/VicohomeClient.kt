@@ -8,6 +8,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
+import java.util.ArrayDeque
 import java.util.Locale
 import java.util.UUID
 
@@ -16,11 +17,24 @@ private const val BASEUS_APP_VERSION_CODE = "32"
 private const val BASEUS_XM_APP_KEY = "YGnzWsirKf55MxrjG5"
 private const val BASEUS_XM_APP_SECRET = "Teyi6OmXJZxVDiZY4k"
 private const val BASEUS_XM_SERVICE_VERSION = "1.0"
+private const val BASEUS_THING_SDK_VERSION = "6.2.0"
 class VicohomeClient(
     private val email: String,
     private val password: String,
     private val regionChoice: VicohomeRegionChoice = VicohomeRegionChoice.AUTO,
 ) {
+    private data class ResolvedVicohomeRegion(
+        val region: VicohomeRegion,
+        val serviceCatalogEntries: List<VicohomeServiceCatalog>,
+    )
+
+    private data class ActionServerHint(
+        val name: String,
+        val baseServer: String,
+        val authRequired: Boolean,
+        val raw: String,
+    )
+
     fun syncRecentData(onProgress: (String) -> Unit): VicohomeSyncResult {
         var lastFailure: Exception? = null
         val regions = VicohomeRegionCatalog.choicesFor(regionChoice)
@@ -29,12 +43,14 @@ class VicohomeClient(
                 onProgress("Logging into Baseus cloud (${region.label})")
                 val accountLogin = loginBaseusAccount(region, onProgress)
                 val privacyConsentUpdated = updatePrivacyConsent(accountLogin.authToken, region, onProgress)
-                val resolvedRegion = resolveBaseusServiceRegion(accountLogin, region, onProgress)
+                val resolved = resolveBaseusServiceRegion(accountLogin, region, onProgress)
+                val resolvedRegion = resolved.region
+                val serviceCatalogEntries = resolved.serviceCatalogEntries
                 if (resolvedRegion != region) {
                     onProgress("Resolved Baseus service registry for ${region.label}")
                 }
                 val xmToken = try {
-                    loginXmSession(accountLogin, resolvedRegion, onProgress)
+                    loginXmSession(accountLogin, resolvedRegion, serviceCatalogEntries, onProgress)
                 } catch (exception: Exception) {
                     val fallbackToken = firstNonBlank(accountLogin.xmTokenHint, accountLogin.authToken)
                     if (fallbackToken.isNotBlank()) {
@@ -48,6 +64,7 @@ class VicohomeClient(
                 val devices = listDevices(
                     tokens = listOf(xmToken, accountLogin.xmTokenHint, accountLogin.authToken).filter { it.isNotBlank() }.distinct(),
                     region = resolvedRegion,
+                    serviceCatalogEntries = serviceCatalogEntries,
                     onProgress = onProgress,
                 )
                 return VicohomeSyncResult(
@@ -66,6 +83,7 @@ class VicohomeClient(
                         xmToken = xmToken,
                         region = resolvedRegion,
                         privacyConsentUpdated = privacyConsentUpdated,
+                        serviceCatalogEntries = serviceCatalogEntries,
                     ),
                 )
             } catch (exception: Exception) {
@@ -106,7 +124,12 @@ class VicohomeClient(
             )
 
         var lastFailure: Exception? = null
-        for (baseUrl in session.region.webrtcApiBaseCandidates) {
+        val baseUrlCandidates = (
+            session.region.webrtcApiBaseCandidates +
+                session.region.apiBaseCandidates +
+                session.serviceCatalogEntries.flatMap { listOf(it.bsServer, it.oauthServer, it.globalServer) }
+        ).filter { it.isNotBlank() }.distinct()
+        for (baseUrl in baseUrlCandidates) {
             try {
                 onProgress("Trying Baseus live host $baseUrl")
                 val response = postJson(
@@ -133,6 +156,612 @@ class VicohomeClient(
             }
         }
         throw lastFailure ?: IllegalStateException("Live ticket request failed (${session.region.label})")
+    }
+
+    fun probeThingRtc(
+        session: VicohomeSession,
+        targetSerialNumber: String,
+        targetIp: String = "",
+        targetName: String = "",
+        clientDeviceId: String = "",
+        onProgress: (String) -> Unit = {},
+    ): ThingRtcProbeResult {
+        val normalizedSerial = targetSerialNumber.trim()
+        val normalizedIp = targetIp.trim()
+        val normalizedName = targetName.trim()
+        val targetIdentity = firstNonBlank(normalizedSerial, normalizedIp, normalizedName)
+        val probeClientDeviceId = firstNonBlank(
+            clientDeviceId,
+            android.os.Build.FINGERPRINT,
+            android.os.Build.MODEL,
+            "android",
+        )
+        val tokenCandidates = listOf(
+            session.xmToken,
+            session.accountAuthToken,
+            TokenHarvestStore.latestDecodedTokenFromSource("Baseus auth response"),
+            TokenHarvestStore.latestTokenFromSource("Baseus auth response"),
+            TokenHarvestStore.latestDecodedTokenFromSource("Baseus auth"),
+            TokenHarvestStore.latestTokenFromSource("Baseus auth"),
+        ).mapNotNull { it?.trim()?.takeIf { token -> token.isNotBlank() } }.distinct().take(3)
+        val baseUrls = (
+            session.region.webrtcApiBaseCandidates +
+                session.region.apiBaseCandidates +
+                session.serviceCatalogEntries.flatMap { listOf(it.bsServer, it.oauthServer, it.globalServer) }
+        ).filter { it.isNotBlank() }.distinct().take(4)
+        val bodyVariants = ThingProbeBodyVariant.entries
+        val attempts = mutableListOf<ThingRtcProbeAttempt>()
+        val bestFields = linkedMapOf<String, String>()
+        var bestSummary = ""
+        var latestSessionTid = ""
+        var foundUsefulProbe = false
+
+        if (tokenCandidates.isEmpty()) {
+            onProgress("Thing RTC probe has no token candidates yet; using anonymous probe requests")
+        }
+
+        for (baseUrl in baseUrls) {
+            if (foundUsefulProbe) break
+            for (token in tokenCandidates.ifEmpty { listOf("") }) {
+                if (foundUsefulProbe) break
+                val tokenLabel = token.takeIf { it.isNotBlank() }?.let { "token" } ?: "anonymous"
+                for (bodyVariant in bodyVariants) {
+                    if (foundUsefulProbe) break
+                    val abilityAttempt = performThingRtcProbeRequest(
+                        baseUrl = baseUrl,
+                        region = session.region,
+                        apiName = "thing.m.ipc.device.ability.get",
+                        sid = token,
+                        devId = targetIdentity,
+                        clientDeviceId = probeClientDeviceId,
+                        ctId = "",
+                        includeBizDm = false,
+                        extraPostData = JSONObject().put("devId", targetIdentity),
+                        targetIdentity = targetIdentity,
+                        tokenLabel = tokenLabel,
+                        bodyVariant = bodyVariant,
+                        onProgress = onProgress,
+                    )
+                    attempts += abilityAttempt
+                    mergeThingProbeFields(bestFields, abilityAttempt.parsedFields)
+                    if (abilityAttempt.parsedSummary.isNotBlank()) {
+                        bestSummary = chooseThingProbeSummary(bestSummary, abilityAttempt.parsedSummary)
+                    }
+
+                    val probeCtId = buildThingProbeClientTid(targetIdentity.ifBlank { targetName.ifBlank { targetIp } })
+                    val sessionInitAttempt = performThingRtcProbeRequest(
+                        baseUrl = baseUrl,
+                        region = session.region,
+                        apiName = "thing.m.rtc.session.init",
+                        sid = token,
+                        devId = targetIdentity,
+                        clientDeviceId = probeClientDeviceId,
+                        ctId = probeCtId,
+                        includeBizDm = true,
+                        extraPostData = JSONObject().put("devId", targetIdentity),
+                        targetIdentity = targetIdentity,
+                        tokenLabel = tokenLabel,
+                        bodyVariant = bodyVariant,
+                        onProgress = onProgress,
+                    )
+                    attempts += sessionInitAttempt
+                    mergeThingProbeFields(bestFields, sessionInitAttempt.parsedFields)
+                    val sessionTid = firstNonBlank(
+                        sessionInitAttempt.parsedFields["data.sessionTid"],
+                        sessionInitAttempt.parsedFields["sessionTid"],
+                        sessionInitAttempt.parsedFields["data.session_tid"],
+                        sessionInitAttempt.parsedFields["session_tid"],
+                        sessionInitAttempt.parsedFields["data.session_id"],
+                        sessionInitAttempt.parsedFields["session_id"],
+                        sessionInitAttempt.parsedFields["data.sessionId"],
+                        sessionInitAttempt.parsedFields["sessionId"],
+                    )
+                    if (sessionTid.isNotBlank()) {
+                        latestSessionTid = sessionTid
+                        bestFields["sessionTid"] = sessionTid
+                        if (sessionInitAttempt.parsedSummary.isNotBlank()) {
+                            bestSummary = chooseThingProbeSummary(bestSummary, sessionInitAttempt.parsedSummary)
+                        }
+                    }
+
+                    val configCtId = firstNonBlank(
+                        if (latestSessionTid.isNotBlank()) buildThingProbeClientTid(latestSessionTid) else "",
+                        probeCtId,
+                    )
+                    val configAttempt = performThingRtcProbeRequest(
+                        baseUrl = baseUrl,
+                        region = session.region,
+                        apiName = "thing.m.rtc.config.get",
+                        sid = token,
+                        devId = targetIdentity,
+                        clientDeviceId = probeClientDeviceId,
+                        ctId = configCtId,
+                        includeBizDm = true,
+                        extraPostData = JSONObject().put("devId", targetIdentity),
+                        targetIdentity = targetIdentity,
+                        tokenLabel = tokenLabel,
+                        bodyVariant = bodyVariant,
+                        onProgress = onProgress,
+                    )
+                    attempts += configAttempt
+                    mergeThingProbeFields(bestFields, configAttempt.parsedFields)
+                    if (configAttempt.parsedSummary.isNotBlank()) {
+                        bestSummary = chooseThingProbeSummary(bestSummary, configAttempt.parsedSummary)
+                    }
+
+                    if (configAttempt.responseCode in 200..299 && configAttempt.parsedFields.isNotEmpty()) {
+                        onProgress("Thing RTC probe found ${configAttempt.parsedFields.size} parsed field(s) on $baseUrl")
+                    }
+                    if (isUsefulThingProbeHit(configAttempt.parsedFields)) {
+                        foundUsefulProbe = true
+                        break
+                    }
+                }
+            }
+        }
+
+        val message = when {
+            latestSessionTid.isNotBlank() -> "Thing RTC probe captured sessionTid $latestSessionTid"
+            bestFields.isNotEmpty() -> "Thing RTC probe captured ${bestFields.size} field(s)"
+            attempts.isNotEmpty() -> attempts.last().parsedSummary.ifBlank { attempts.last().responseMessage.ifBlank { "Thing RTC probe complete" } }
+            else -> "Thing RTC probe complete"
+        }
+
+        return ThingRtcProbeResult(
+            targetSerialNumber = normalizedSerial,
+            targetIp = normalizedIp,
+            targetName = normalizedName,
+            region = session.region,
+            tokenSource = firstNonBlank(
+                if (session.xmToken.isNotBlank()) "session.xmToken" else "",
+                if (session.accountAuthToken.isNotBlank()) "session.accountAuthToken" else "",
+                if (TokenHarvestStore.latestDecodedTokenFromSource("Baseus auth response").isNotBlank()) "Baseus auth response (decoded)" else "",
+                if (TokenHarvestStore.latestTokenFromSource("Baseus auth response").isNotBlank()) "Baseus auth response" else "",
+                if (TokenHarvestStore.latestDecodedTokenFromSource("Baseus auth").isNotBlank()) "Baseus auth (decoded)" else "",
+                if (TokenHarvestStore.latestTokenFromSource("Baseus auth").isNotBlank()) "Baseus auth" else "",
+            ),
+            attempts = attempts,
+            message = message,
+            bestParsedSummary = bestSummary,
+            bestParsedFields = bestFields,
+        )
+    }
+
+    private fun performThingRtcProbeRequest(
+        baseUrl: String,
+        region: VicohomeRegion,
+        apiName: String,
+        sid: String,
+        devId: String,
+        clientDeviceId: String,
+        ctId: String,
+        includeBizDm: Boolean,
+        extraPostData: JSONObject,
+        targetIdentity: String,
+        tokenLabel: String,
+        bodyVariant: ThingProbeBodyVariant,
+        onProgress: (String) -> Unit = {},
+    ): ThingRtcProbeAttempt {
+        val envelope = buildThingProbeEnvelope(
+            apiName = apiName,
+            region = region,
+            sid = sid,
+            devId = devId,
+            clientDeviceId = clientDeviceId,
+            ctId = ctId,
+            includeBizDm = includeBizDm,
+            extraPostData = extraPostData,
+        )
+        val requestUrl = buildThingApiUrl(baseUrl)
+        val requestBody = when (bodyVariant) {
+            ThingProbeBodyVariant.FORM -> buildThingFormBody(envelope)
+            ThingProbeBodyVariant.JSON -> JSONObject(envelope).toString()
+        }
+        val headers = linkedMapOf(
+            "User-Agent" to buildThingUserAgent(),
+            "Accept" to "application/json",
+            "Domain-Name" to "host_domain",
+            "Connection" to "keep-alive",
+            "Content-Type" to when (bodyVariant) {
+                ThingProbeBodyVariant.FORM -> "application/x-www-form-urlencoded; charset=utf-8"
+                ThingProbeBodyVariant.JSON -> "application/json; charset=utf-8"
+            },
+        )
+        val connection = (URL(requestUrl).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 5000
+            readTimeout = 7000
+            doOutput = true
+            setRequestProperty("User-Agent", headers["User-Agent"].orEmpty())
+            setRequestProperty("Accept", headers["Accept"].orEmpty())
+            setRequestProperty("Domain-Name", headers["Domain-Name"].orEmpty())
+            setRequestProperty("Connection", headers["Connection"].orEmpty())
+            setRequestProperty("Content-Type", headers["Content-Type"].orEmpty())
+            if (requestBody.isNotBlank()) {
+                setRequestProperty("Content-Length", requestBody.toByteArray(StandardCharsets.UTF_8).size.toString())
+            }
+        }
+
+        var responseCode = -1
+        var responseMessage = ""
+        var responseBody = ""
+        try {
+            connection.outputStream.use { output ->
+                output.write(requestBody.toByteArray(StandardCharsets.UTF_8))
+            }
+            responseCode = connection.responseCode
+            responseMessage = connection.responseMessage.orEmpty()
+            val responseStream = if (responseCode in 200..299) {
+                connection.inputStream
+            } else {
+                connection.errorStream
+            }
+            responseBody = responseStream?.use { readAll(it) }.orEmpty()
+            recordTokenArtifacts("Thing RTC $apiName @ $baseUrl (${bodyVariant.name.lowercase(Locale.US)})", connection.headerFields, responseBody)
+            val (parsedSummary, parsedFields) = parseThingProbeResponse(responseBody)
+            onProgress(
+                "Thing RTC $apiName @ $baseUrl (${bodyVariant.name.lowercase(Locale.US)}) for ${targetIdentity.ifBlank { devId }} via $tokenLabel • HTTP $responseCode${if (responseMessage.isNotBlank()) " $responseMessage" else ""}${if (parsedSummary.isNotBlank()) " • $parsedSummary" else ""}"
+            )
+            return ThingRtcProbeAttempt(
+                apiName = apiName,
+                baseUrl = baseUrl,
+                requestUrl = requestUrl,
+                requestMethod = "POST/${bodyVariant.name.lowercase(Locale.US)}",
+                requestEnvelope = envelope,
+                requestHeaders = headers,
+                responseCode = responseCode,
+                responseMessage = responseMessage,
+                responseBody = responseBody,
+                parsedSummary = parsedSummary,
+                parsedFields = parsedFields,
+            )
+        } catch (exception: Exception) {
+            responseMessage = exception.message.orEmpty()
+            responseBody = responseBody.ifBlank { exception.stackTraceToString() }
+            recordTokenArtifacts("Thing RTC $apiName @ $baseUrl (${bodyVariant.name.lowercase(Locale.US)})", connection.headerFields, responseBody)
+            val parsedFields = linkedMapOf<String, String>()
+            parsedFields["error"] = responseMessage.ifBlank { exception.javaClass.simpleName }
+            return ThingRtcProbeAttempt(
+                apiName = apiName,
+                baseUrl = baseUrl,
+                requestUrl = requestUrl,
+                requestMethod = "POST/${bodyVariant.name.lowercase(Locale.US)}",
+                requestEnvelope = envelope,
+                requestHeaders = headers,
+                responseCode = responseCode,
+                responseMessage = responseMessage.ifBlank { exception.javaClass.simpleName },
+                responseBody = responseBody,
+                parsedSummary = responseMessage.ifBlank { exception.javaClass.simpleName },
+                parsedFields = parsedFields,
+            )
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun buildThingProbeEnvelope(
+        apiName: String,
+        region: VicohomeRegion,
+        sid: String,
+        devId: String,
+        clientDeviceId: String,
+        ctId: String,
+        includeBizDm: Boolean,
+        extraPostData: JSONObject,
+    ): LinkedHashMap<String, String> {
+        val envelope = linkedMapOf<String, String>()
+        envelope["a"] = apiName
+        envelope["v"] = "1.0"
+        envelope["clientId"] = BASEUS_XM_APP_KEY
+        envelope["os"] = "Android"
+        envelope["appVersion"] = BASEUS_APP_VERSION_NAME
+        envelope["lang"] = "en"
+        envelope["sdkVersion"] = BASEUS_THING_SDK_VERSION
+        envelope["deviceCoreVersion"] = BASEUS_THING_SDK_VERSION
+        envelope["ttid"] = "Android"
+        envelope["osSystem"] = android.os.Build.VERSION.RELEASE.orEmpty()
+        envelope["requestId"] = buildThingProbeRequestId()
+        envelope["platform"] = sanitizeHeaderValue(android.os.Build.MODEL)
+        envelope["timeZoneId"] = java.util.TimeZone.getDefault().id
+        envelope["et"] = "3"
+        envelope["cp"] = "gzip"
+        envelope["channel"] = "sdk"
+        envelope["bizData"] = buildThingBizData(region)
+        envelope["deviceId"] = clientDeviceId
+        if (sid.isNotBlank()) {
+            envelope["sid"] = sid
+        }
+        if (devId.isNotBlank()) {
+            envelope["devId"] = devId
+        }
+        if (includeBizDm) {
+            envelope["bizDM"] = "ipc"
+        }
+        if (ctId.isNotBlank()) {
+            envelope["ctId"] = ctId
+        }
+        envelope["postData"] = extraPostData.toString()
+        envelope["time"] = System.currentTimeMillis().toString()
+        envelope["sign"] = buildThingProbeSignature(envelope)
+        return envelope
+    }
+
+    private fun buildThingBizData(region: VicohomeRegion): String {
+        return JSONObject()
+            .put("customDomainSupport", "1")
+            .put("sdkInt", android.os.Build.VERSION.SDK_INT.toString())
+            .put("brand", sanitizeHeaderValue(android.os.Build.BRAND))
+            .put("region", region.shortName)
+            .toString()
+    }
+
+    private fun buildThingApiUrl(baseUrl: String): String {
+        return if (baseUrl.endsWith("/api.json")) {
+            baseUrl
+        } else {
+            baseUrl.trimEnd('/') + "/api.json"
+        }
+    }
+
+    private fun buildThingProbeClientTid(reference: String): String {
+        val cleanedReference = reference.trim().ifBlank { "thing" }
+        return "${cleanedReference}_${System.currentTimeMillis()}"
+    }
+
+    private fun buildThingProbeRequestId(): String {
+        return UUID.randomUUID().toString()
+    }
+
+    private fun buildThingUserAgent(): String {
+        return "Thing-UA=APP/Android/$BASEUS_APP_VERSION_NAME/SDK/$BASEUS_THING_SDK_VERSION"
+    }
+
+    private fun buildThingFormBody(fields: Map<String, String>): String {
+        return fields.entries.joinToString("&") { (key, value) ->
+            "${java.net.URLEncoder.encode(key, StandardCharsets.UTF_8.name())}=${
+                java.net.URLEncoder.encode(value, StandardCharsets.UTF_8.name())
+            }"
+        }
+    }
+
+    private fun buildThingProbeSignature(fields: Map<String, String>): String {
+        val signableKeys = listOf(
+            "a",
+            "v",
+            "clientId",
+            "os",
+            "appVersion",
+            "lang",
+            "sdkVersion",
+            "deviceCoreVersion",
+            "ttid",
+            "osSystem",
+            "requestId",
+            "platform",
+            "timeZoneId",
+            "et",
+            "cp",
+            "channel",
+            "bizData",
+            "deviceId",
+            "sid",
+            "bizDM",
+            "ctId",
+            "devId",
+            "time",
+            "postData",
+        )
+        val canonical = signableKeys.mapNotNull { key ->
+            val value = fields[key].orEmpty().trim()
+            if (value.isBlank()) {
+                null
+            } else {
+                val canonicalValue = if (key == "postData") {
+                    MessageDigest.getInstance("MD5")
+                        .digest(value.toByteArray(StandardCharsets.UTF_8))
+                        .joinToString(separator = "") { byte ->
+                            byte.toInt().and(0xff).toString(16).padStart(2, '0')
+                        }
+                } else {
+                    value
+                }
+                "$key=$canonicalValue"
+            }
+        }.sorted().joinToString("&")
+        val digest = MessageDigest.getInstance("MD5").digest(canonical.toByteArray(StandardCharsets.UTF_8))
+        return digest.joinToString(separator = "") { byte ->
+            byte.toInt().and(0xff).toString(16).padStart(2, '0')
+        }
+    }
+
+    private fun parseThingProbeResponse(responseBody: String): Pair<String, Map<String, String>> {
+        val trimmed = responseBody.trim()
+        if (trimmed.isBlank()) {
+            return "empty response" to emptyMap()
+        }
+        return try {
+            val root = when {
+                trimmed.startsWith("{") -> JSONObject(trimmed)
+                trimmed.startsWith("[") -> JSONObject().put("items", JSONArray(trimmed))
+                else -> JSONObject().put("body", trimmed)
+            }
+            val flattened = linkedMapOf<String, String>()
+            flattenThingJson(root, "", flattened)
+            val interesting = extractInterestingThingFields(flattened)
+            val summaryParts = mutableListOf<String>()
+            listOf(
+                "code",
+                "result",
+                "msg",
+                "message",
+                "data.sessionTid",
+                "sessionTid",
+                "data.p2pConfig.session.sessionId",
+                "data.p2pConfig.session.icePassword",
+                "data.p2pConfig.session.iceUfrag",
+                "data.p2pId",
+                "data.password",
+                "data.skill",
+                "data.p2pPolicy",
+                "data.p2pSpecifiedType",
+                "data.audioAttributes",
+                "data.vedioClarity",
+                "data.maxZoomInTimes",
+                "data.signalServer",
+                "data.signalServerIpAddress",
+                "data.websocketPath",
+                "data.accessToken",
+            ).forEach { key ->
+                val value = interesting[key].orEmpty().trim()
+                if (value.isNotBlank()) {
+                    summaryParts += "$key=$value"
+                }
+            }
+            if (summaryParts.isEmpty()) {
+                summaryParts += interesting.entries.take(6).joinToString(", ") { (key, value) -> "$key=$value" }
+            }
+            val summary = summaryParts.joinToString(" • ").ifBlank { trimmed.take(240) }
+            summary to interesting
+        } catch (exception: Exception) {
+            "non-json response: ${exception.message ?: "unknown error"}" to linkedMapOf(
+                "body" to trimmed.take(1000),
+            )
+        }
+    }
+
+    private fun extractInterestingThingFields(flattened: Map<String, String>): Map<String, String> {
+        val keys = listOf(
+            "code",
+            "result",
+            "msg",
+            "message",
+            "data.sessionTid",
+            "sessionTid",
+            "data.session_tid",
+            "session_tid",
+            "data.sessionId",
+            "sessionId",
+            "data.session_id",
+            "session_id",
+            "data.p2pConfig",
+            "data.p2pConfig.session",
+            "data.p2pConfig.session.sessionId",
+            "data.p2pConfig.session.icePassword",
+            "data.p2pConfig.session.iceUfrag",
+            "data.p2pConfig.session.aesKey",
+            "data.p2pConfig.session.devId",
+            "data.p2pConfig.ices",
+            "data.p2pId",
+            "data.password",
+            "data.skill",
+            "data.p2pPolicy",
+            "data.p2pSpecifiedType",
+            "data.audioAttributes",
+            "data.vedioClarity",
+            "data.maxZoomInTimes",
+            "data.signalServer",
+            "data.signalServerIpAddress",
+            "data.websocketPath",
+            "data.sign",
+            "data.accessToken",
+            "payload",
+            "payload.sessionTid",
+            "payload.p2pConfig",
+            "payload.accessToken",
+        )
+        val selected = linkedMapOf<String, String>()
+        keys.forEach { key ->
+            val value = flattened[key].orEmpty().trim()
+            if (value.isNotBlank()) {
+                selected[key] = value.take(1000)
+            }
+        }
+        if (selected.isEmpty()) {
+            flattened.entries.take(32).forEach { (key, value) ->
+                if (value.isNotBlank()) {
+                    selected[key] = value.take(1000)
+                }
+            }
+        }
+        return selected
+    }
+
+    private fun flattenThingJson(
+        value: Any?,
+        prefix: String = "",
+        out: MutableMap<String, String>,
+    ) {
+        when (value) {
+            is JSONObject -> {
+                val keys = value.keys()
+                while (keys.hasNext()) {
+                    val key = keys.next()
+                    val childPrefix = if (prefix.isBlank()) key else "$prefix.$key"
+                    flattenThingJson(value.opt(key), childPrefix, out)
+                }
+            }
+            is JSONArray -> {
+                for (index in 0 until value.length()) {
+                    val childPrefix = if (prefix.isBlank()) index.toString() else "$prefix[$index]"
+                    flattenThingJson(value.opt(index), childPrefix, out)
+                }
+            }
+            null, JSONObject.NULL -> {
+                if (prefix.isNotBlank()) {
+                    out[prefix] = ""
+                }
+            }
+            else -> {
+                if (prefix.isNotBlank()) {
+                    out[prefix] = value.toString().take(1000)
+                }
+            }
+        }
+    }
+
+    private fun mergeThingProbeFields(target: MutableMap<String, String>, source: Map<String, String>) {
+        source.forEach { (key, value) ->
+            if (value.isNotBlank() && !target.containsKey(key)) {
+                target[key] = value
+            }
+        }
+    }
+
+    private fun chooseThingProbeSummary(current: String, candidate: String): String {
+        val currentScore = thingProbeSummaryScore(current)
+        val candidateScore = thingProbeSummaryScore(candidate)
+        return if (candidateScore >= currentScore) candidate else current
+    }
+
+    private fun isUsefulThingProbeHit(fields: Map<String, String>): Boolean {
+        return fields.keys.any { key ->
+            key.contains("sessionTid", ignoreCase = true) ||
+                key.contains("p2pConfig", ignoreCase = true) ||
+                key.contains("signalServer", ignoreCase = true) ||
+                key.contains("password", ignoreCase = true) ||
+                key.contains("p2pId", ignoreCase = true) ||
+                key.contains("websocketPath", ignoreCase = true) ||
+                key.contains("accessToken", ignoreCase = true) ||
+                key.contains("traceId", ignoreCase = true) ||
+                key.contains("groupId", ignoreCase = true)
+        }
+    }
+
+    private fun thingProbeSummaryScore(summary: String): Int {
+        val lower = summary.lowercase(Locale.US)
+        return when {
+            lower.contains("sessiontid") -> 5
+            lower.contains("p2pconfig") -> 4
+            lower.contains("signalserver") -> 3
+            lower.contains("password") -> 2
+            lower.isNotBlank() -> 1
+            else -> 0
+        }
+    }
+
+    private enum class ThingProbeBodyVariant {
+        FORM,
+        JSON,
     }
 
     private fun generateRequestID(): String {
@@ -208,7 +837,7 @@ class VicohomeClient(
         accountLogin: VicohomeAccountLogin,
         region: VicohomeRegion,
         onProgress: (String) -> Unit = {},
-    ): VicohomeRegion {
+    ): ResolvedVicohomeRegion {
         val candidateTokens = listOf(
             TokenHarvestStore.latestDecodedTokenFromSource("Baseus auth response"),
             TokenHarvestStore.latestTokenFromSource("Baseus auth response"),
@@ -216,7 +845,7 @@ class VicohomeClient(
             accountLogin.authToken,
         ).mapNotNull { it?.trim()?.takeIf { token -> token.isNotBlank() } }.distinct()
         if (candidateTokens.isEmpty()) {
-            return region
+            return ResolvedVicohomeRegion(region, emptyList())
         }
 
         for (baseUrl in (region.consentBaseCandidates + region.authBaseCandidates + region.apiBaseCandidates).distinct()) {
@@ -235,13 +864,15 @@ class VicohomeClient(
                         extraHeaders = mapOf("Domain-Name" to "global_domain"),
                     )
                     val responseObject = JSONObject(response)
-                    val catalog = extractServiceCatalog(responseObject, region)
+                    val catalogResolution = extractServiceCatalogResolution(responseObject, region)
+                    val catalog = catalogResolution.selected
                     if (catalog != null) {
                         TokenHarvestStore.recordFromText("Baseus service registry", response)
                         onProgress(
                             "Baseus service registry resolved: ${catalog.label} ${catalog.value} bs=${catalog.bsServer} auth=${catalog.oauthServer} global=${catalog.globalServer}"
                         )
-                        return region.copy(
+                        return ResolvedVicohomeRegion(
+                            region = region.copy(
                             apiBase = firstNonBlank(catalog.bsServer, region.apiBase),
                             apiBaseCandidates = listOf(catalog.bsServer, region.apiBaseCandidates.firstOrNull().orEmpty(), "https://api-${region.shortName.lowercase(Locale.US)}.vicohome.io")
                                 .filter { it.isNotBlank() }
@@ -257,6 +888,8 @@ class VicohomeClient(
                                 .filter { it.isNotBlank() }
                                 .distinct(),
                             serverCode = firstNonBlank(catalog.value, region.serverCode),
+                        ),
+                            serviceCatalogEntries = catalogResolution.entries,
                         )
                     }
                 } catch (exception: Exception) {
@@ -264,15 +897,20 @@ class VicohomeClient(
                 }
             }
         }
-        return region
+        return ResolvedVicohomeRegion(region, emptyList())
     }
 
     private fun loginXmSession(
         accountLogin: VicohomeAccountLogin,
         region: VicohomeRegion,
+        serviceCatalogEntries: List<VicohomeServiceCatalog> = emptyList(),
         onProgress: (String) -> Unit = {},
     ): String {
-        val hostCandidates = (region.authBaseCandidates + region.apiBaseCandidates).distinct()
+        val hostCandidates = (
+            region.authBaseCandidates +
+                region.apiBaseCandidates +
+                serviceCatalogEntries.flatMap { listOf(it.bsServer, it.oauthServer, it.globalServer) }
+        ).filter { it.isNotBlank() }.distinct()
         val bootstrapToken = firstNonBlank(
             TokenHarvestStore.latestDecodedTokenFromSource("Baseus auth"),
             accountLogin.xmTokenHint,
@@ -363,13 +1001,29 @@ class VicohomeClient(
     private fun listDevices(
         tokens: List<String>,
         region: VicohomeRegion,
+        serviceCatalogEntries: List<VicohomeServiceCatalog> = emptyList(),
         onProgress: (String) -> Unit = {},
     ): List<VicohomeDevice> {
         val headerModes = listOf(TokenHeaderMode.BOTH, TokenHeaderMode.AUTH_ONLY, TokenHeaderMode.AUTHORIZATION_ONLY)
         var lastFailure: Exception? = null
         var sawSuccessfulResponse = false
         var lastEmptyShape: String? = null
-        for (baseUrl in region.apiBaseCandidates) {
+        val baseUrlQueue = ArrayDeque<String>()
+        val enqueuedBaseUrls = linkedSetOf<String>()
+        fun enqueueBaseUrl(value: String?) {
+            val normalized = value?.trim().orEmpty()
+            if (normalized.isBlank() || !enqueuedBaseUrls.add(normalized)) {
+                return
+            }
+            baseUrlQueue.addLast(normalized)
+        }
+        region.apiBaseCandidates.forEach { enqueueBaseUrl(it) }
+        serviceCatalogEntries.forEach { catalog ->
+            listOf(catalog.bsServer, catalog.oauthServer, catalog.globalServer).forEach { enqueueBaseUrl(it) }
+        }
+
+        while (baseUrlQueue.isNotEmpty()) {
+            val baseUrl = baseUrlQueue.removeFirst()
             for (token in tokens) {
                 for (headerMode in headerModes) {
                     try {
@@ -386,6 +1040,14 @@ class VicohomeClient(
                         val resultCode = responseObject.optInt("code", responseObject.optInt("result", 0))
                         if (resultCode != 0) {
                             val message = responseObject.optString("msg", responseObject.optString("message", "unknown error"))
+                            maybeEnqueueActionServerHosts(
+                                response = response,
+                                message = message,
+                                baseUrlQueue = baseUrlQueue,
+                                enqueuedBaseUrls = enqueuedBaseUrls,
+                                serviceCatalogEntries = serviceCatalogEntries,
+                                onProgress = onProgress,
+                            )
                             throw IllegalStateException("Device list request failed (${region.label} @ $baseUrl): $message")
                         }
 
@@ -417,6 +1079,14 @@ class VicohomeClient(
                         val resultCode = responseObject.optInt("code", responseObject.optInt("result", 0))
                         if (resultCode != 0) {
                             val message = responseObject.optString("msg", responseObject.optString("message", "unknown error"))
+                            maybeEnqueueActionServerHosts(
+                                response = response,
+                                message = message,
+                                baseUrlQueue = baseUrlQueue,
+                                enqueuedBaseUrls = enqueuedBaseUrls,
+                                serviceCatalogEntries = serviceCatalogEntries,
+                                onProgress = onProgress,
+                            )
                             throw IllegalStateException("Device list request failed (${region.label} @ $baseUrl): $message")
                         }
 
@@ -935,7 +1605,10 @@ class VicohomeClient(
         }
     }
 
-    private fun extractServiceCatalog(responseObject: JSONObject, region: VicohomeRegion): VicohomeServiceCatalog? {
+    private fun extractServiceCatalogResolution(
+        responseObject: JSONObject,
+        region: VicohomeRegion,
+    ): ServiceCatalogResolution {
         val candidates = mutableListOf<JSONObject>()
         fun collectObjects(value: Any?) {
             when (value) {
@@ -962,14 +1635,13 @@ class VicohomeClient(
         collectObjects(responseObject.opt("base_cloud_service_list"))
 
         val normalizedRegion = region.label.lowercase(Locale.US)
+        val entries = mutableListOf<VicohomeServiceCatalog>()
+        var selected: VicohomeServiceCatalog? = null
         for (candidate in candidates) {
             val label = candidate.optString("label").orEmpty()
             val description = candidate.optString("description").orEmpty()
             val value = candidate.optString("value").orEmpty()
             val mergedText = listOf(label, description, value).joinToString(" ").lowercase(Locale.US)
-            if (normalizedRegion !in mergedText && !mergedText.contains(normalizedRegion.take(2))) {
-                continue
-            }
             val serversObject = candidate.optJSONObject("servers")
                 ?: candidate.optJSONObject("value")?.takeIf { it.has("bsServer") || it.has("oauthServer") || it.has("globalServer") }
                 ?: value.takeIf { it.trim().startsWith("{") }?.let { runCatching { JSONObject(it) }.getOrNull() }
@@ -990,17 +1662,24 @@ class VicohomeClient(
                     serversObject.optString("globalDomain").orEmpty(),
                 )
                 if (bsServer.isNotBlank() || oauthServer.isNotBlank() || globalServer.isNotBlank()) {
-                    return VicohomeServiceCatalog(
+                    val entry = VicohomeServiceCatalog(
                         label = label.ifBlank { region.label },
                         value = value.ifBlank { region.serverCode.orEmpty() },
                         bsServer = bsServer.ifBlank { region.apiBase },
                         oauthServer = oauthServer.ifBlank { region.authBaseCandidates.firstOrNull().orEmpty() },
                         globalServer = globalServer.ifBlank { region.webrtcApiBase },
                     )
+                    entries += entry
+                    if (selected == null && (normalizedRegion in mergedText || mergedText.contains(normalizedRegion.take(2)))) {
+                        selected = entry
+                    }
                 }
             }
         }
-        return null
+        if (selected == null) {
+            selected = entries.firstOrNull()
+        }
+        return ServiceCatalogResolution(selected, entries)
     }
 
     private fun buildRequestSign(requestBody: String, timestamp: String): String {
@@ -1077,6 +1756,94 @@ class VicohomeClient(
             countryNo = data.optString("countryNo").takeIf { it.isNotBlank() },
         )
     }
+
+    private fun maybeEnqueueActionServerHosts(
+        response: String,
+        message: String,
+        baseUrlQueue: ArrayDeque<String>,
+        enqueuedBaseUrls: MutableSet<String>,
+        serviceCatalogEntries: List<VicohomeServiceCatalog>,
+        onProgress: (String) -> Unit,
+    ) {
+        val hint = extractActionServerHint(response) ?: extractActionServerHint(message) ?: return
+        onProgress(
+            "Baseus ActionServer hint: name=${hint.name} baseServer=${hint.baseServer} auth=${hint.authRequired} raw=${hint.raw}"
+        )
+        TokenHarvestStore.record("Baseus ActionServer", hint.raw, "action server hint")
+        val matchingEntries = serviceCatalogEntries.filter { catalog ->
+            catalog.matchesServiceHint(hint.name) || catalog.matchesServiceHint(hint.baseServer)
+        }
+        if (matchingEntries.isEmpty()) {
+            val guessedHost = buildGuessHostFromActionServer(hint.baseServer)
+            if (guessedHost.isNotBlank() && enqueuedBaseUrls.add(guessedHost)) {
+                baseUrlQueue.addLast(guessedHost)
+                onProgress("Queued guessed Baseus host for ActionServer $guessedHost")
+            }
+            return
+        }
+        matchingEntries.forEach { catalog ->
+            listOf(catalog.bsServer, catalog.oauthServer, catalog.globalServer).forEach { candidate ->
+                val normalized = candidate.trim()
+                if (normalized.isNotBlank() && enqueuedBaseUrls.add(normalized)) {
+                    baseUrlQueue.addLast(normalized)
+                    onProgress("Queued Baseus host from ActionServer match: $normalized")
+                }
+            }
+        }
+    }
+
+    private fun extractActionServerHint(text: String): ActionServerHint? {
+        val regex = Regex(
+            """ActionServer\s*\(\s*name\s*=\s*([^,\)]+)\s*,\s*baseServer\s*=\s*([^,\)]+)\s*,\s*auth\s*=\s*([^)]+)\)""",
+            RegexOption.IGNORE_CASE,
+        )
+        val match = regex.find(text) ?: return null
+        return ActionServerHint(
+            name = match.groupValues.getOrNull(1).orEmpty().trim(),
+            baseServer = match.groupValues.getOrNull(2).orEmpty().trim(),
+            authRequired = match.groupValues.getOrNull(3).orEmpty().trim().equals("true", ignoreCase = true),
+            raw = match.value,
+        )
+    }
+
+    private fun VicohomeServiceCatalog.matchesServiceHint(hint: String): Boolean {
+        val normalizedHint = normalizeServiceKey(hint)
+        if (normalizedHint.isBlank()) return false
+        return listOf(label, value, bsServer, oauthServer, globalServer).any { candidate ->
+            val normalizedCandidate = normalizeServiceKey(candidate)
+            normalizedCandidate.isNotBlank() && (normalizedCandidate.contains(normalizedHint) || normalizedHint.contains(normalizedCandidate))
+        }
+    }
+
+    private fun buildGuessHostFromActionServer(baseServer: String): String {
+        val normalized = normalizeServiceKey(baseServer)
+        if (normalized.isBlank()) {
+            return ""
+        }
+        return when {
+            normalized.contains("userdeviceservice") -> "https://ipc-bu-us-gw.baseussecurity.com"
+            normalized.contains("globalservice") -> "https://api-us.vicoo.tech"
+            normalized.contains("oauthservice") -> "https://baseus-us-auth-gw.baseussecurity.com"
+            else -> ""
+        }
+    }
+
+    private fun normalizeServiceKey(value: String): String {
+        if (value.isBlank()) return ""
+        val builder = StringBuilder(value.length)
+        for (character in value.lowercase(Locale.US)) {
+            when {
+                character.isLetterOrDigit() -> builder.append(character)
+                else -> Unit
+            }
+        }
+        return builder.toString()
+    }
+
+    private data class ServiceCatalogResolution(
+        val selected: VicohomeServiceCatalog?,
+        val entries: List<VicohomeServiceCatalog>,
+    )
 
     private fun readAll(stream: java.io.InputStream): String {
         return BufferedReader(InputStreamReader(stream, StandardCharsets.UTF_8)).use { reader ->
