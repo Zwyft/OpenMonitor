@@ -1044,7 +1044,9 @@ class VicohomeClient(
             add(accountLogin.xmTokenHint)
             add(accountLogin.authToken)
             add(bootstrapToken)
-        }.mapNotNull { it.trim().takeIf { token -> token.isNotBlank() } }.distinct()
+        }.mapNotNull { candidate ->
+            candidate?.trim()?.takeIf { token -> token.isNotBlank() }
+        }.distinct()
         val loginTokenFlags = listOf(0, 1)
         val thingLoginActions = listOf(
             ThingLoginAction(
