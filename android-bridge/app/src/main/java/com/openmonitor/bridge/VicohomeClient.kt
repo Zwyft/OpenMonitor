@@ -935,6 +935,7 @@ class VicohomeClient(
         val hostCandidates = (
             region.authBaseCandidates +
                 region.apiBaseCandidates +
+                region.webrtcApiBaseCandidates +
                 serviceCatalogEntries.flatMap { listOf(it.bsServer, it.oauthServer, it.globalServer) }
         ).filter { it.isNotBlank() }.distinct()
         val bootstrapToken = firstNonBlank(
