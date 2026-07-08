@@ -1094,8 +1094,8 @@ class VicohomeClient(
                         action = thingLoginAction.tokenCreateAction,
                         payload = thingLoginAction.tokenCreatePayload,
                         region = region,
-                        token = null,
-                        headerMode = TokenHeaderMode.NONE,
+                        token = bootstrapToken,
+                        headerMode = TokenHeaderMode.BOTH,
                         domainNameHeader = "global_domain",
                     )
                     TokenHarvestStore.recordFromText("Baseus Thing token create", tokenCreateResponse)
@@ -1131,8 +1131,8 @@ class VicohomeClient(
                                 action = thingLoginAction.loginAction,
                                 payload = thingLoginAction.loginPayloadFactory(loginToken, encryptFlag),
                                 region = region,
-                                token = null,
-                                headerMode = TokenHeaderMode.NONE,
+                                token = bootstrapToken,
+                                headerMode = TokenHeaderMode.BOTH,
                                 domainNameHeader = "global_domain",
                             )
                             TokenHarvestStore.recordFromText("Baseus Thing session", response, note = thingLoginAction.label)
