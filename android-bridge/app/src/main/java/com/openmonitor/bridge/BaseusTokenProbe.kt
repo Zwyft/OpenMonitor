@@ -9,9 +9,9 @@ object BaseusTokenProbe {
 
     fun probe(onProgress: (String) -> Unit = {}): List<String> {
         val commands = listOf(
-            "su -c 'find /data/data/$TARGET_PACKAGE -maxdepth 3 \\( -path \"*/shared_prefs/*.xml\" -o -path \"*/files/*\" -o -path \"*/databases/*\" -o -path \"*/mmkv*\" -o -path \"*/thingmmkv*\" \\) -type f -exec sh -c \"for path do echo \\\"===== \\$path =====\\\"; cat \\\"\\$path\\\" 2>/dev/null; echo; done\" sh {} +'",
+            "su -c 'find /data/data/$TARGET_PACKAGE -maxdepth 3 \\( -path \"*/shared_prefs/*.xml\" -o -path \"*/files/*\" -o -path \"*/databases/*\" -o -path \"*/mmkv*\" -o -path \"*/thingmmkv*\" \\) -type f -exec sh -c \"p=\\\"\\$1\\\"; echo \\\"===== \\$p =====\\\"; cat \\\"\\$p\\\" 2>/dev/null; echo\" sh {} \\;'",
             "su -c 'grep -aR -n -E \"xm_token|xm_host|xm_host_code|xm_app_id|access_token|accessToken|auth\" /data/data/$TARGET_PACKAGE 2>/dev/null'",
-            "run-as $TARGET_PACKAGE sh -c 'find . -maxdepth 4 \\( -path \"./shared_prefs/*.xml\" -o -path \"./files/*\" -o -path \"./databases/*\" -o -path \"./mmkv*\" -o -path \"./thingmmkv*\" \\) -type f -exec sh -c \"for path do echo \\\"===== \\$path =====\\\"; cat \\\"\\$path\\\" 2>/dev/null; echo; done\" sh {} +'",
+            "run-as $TARGET_PACKAGE sh -c 'find . -maxdepth 4 \\( -path \"./shared_prefs/*.xml\" -o -path \"./files/*\" -o -path \"./databases/*\" -o -path \"./mmkv*\" -o -path \"./thingmmkv*\" \\) -type f -exec sh -c \"p=\\\"\\$1\\\"; echo \\\"===== \\$p =====\\\"; cat \\\"\\$p\\\" 2>/dev/null; echo\" sh {} \\;'",
             "run-as $TARGET_PACKAGE sh -c 'grep -aR -n -E \"xm_token|xm_host|xm_host_code|xm_app_id|access_token|accessToken|auth\" . 2>/dev/null'",
         )
         for (command in commands) {
