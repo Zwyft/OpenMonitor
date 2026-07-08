@@ -1008,7 +1008,7 @@ class VicohomeClient(
                         payload = variant.payload,
                         region = region,
                         token = bootstrapToken,
-                        domainNameHeader = "host_domain",
+                        domainNameHeader = "global_domain",
                     )
                     val responseObject = JSONObject(response)
                     val resultCode = responseObject.optInt("code", responseObject.optInt("result", -1))
@@ -1096,7 +1096,7 @@ class VicohomeClient(
                         region = region,
                         token = null,
                         headerMode = TokenHeaderMode.NONE,
-                        domainNameHeader = "host_domain",
+                        domainNameHeader = "global_domain",
                     )
                     TokenHarvestStore.recordFromText("Baseus Thing token create", tokenCreateResponse)
                     val tokenCreateObject = JSONObject(tokenCreateResponse)
@@ -1133,7 +1133,7 @@ class VicohomeClient(
                                 region = region,
                                 token = null,
                                 headerMode = TokenHeaderMode.NONE,
-                                domainNameHeader = "host_domain",
+                                domainNameHeader = "global_domain",
                             )
                             TokenHarvestStore.recordFromText("Baseus Thing session", response, note = thingLoginAction.label)
                             val responseObject = JSONObject(response)
