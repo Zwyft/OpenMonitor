@@ -1,0 +1,15 @@
+{
+  "name": "openmonitor-web",
+  "version": "1.0.0",
+  "description": "Web-based Baseus security camera viewer for legacy devices (iPad 2)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "discover": "node discovery.js --scan"
+  },
+  "dependencies": {
+    "express": "^4.18.2"
+  },
+  "author": "OpenMonitor",
+  "license": "MIT"
+}

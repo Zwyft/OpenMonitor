@@ -1,0 +1,971 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>OpenMonitor - Security Cameras</title>
+  <style>
+    /* ============================================
+       iPad 2 Optimized Dashboard
+       Designed for 1024x768, iOS 9.3.5 Safari
+       Minimal styles, maximum compatibility
+       ============================================ */
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, 'Helvetica Neue', Helvetica, Arial, sans-serif;
+      background: #0a0a0a;
+      color: #e0e0e0;
+      -webkit-text-size-adjust: 100%;
+      overflow-x: hidden;
+    }
+
+    /* Status Bar */
+    #status-bar {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 100;
+      background: #1a1a2e;
+      padding: 8px 16px;
+      display: -webkit-flex;
+      display: flex;
+      -webkit-align-items: center;
+      align-items: center;
+      -webkit-justify-content: space-between;
+      justify-content: space-between;
+      border-bottom: 1px solid #333;
+      height: 44px;
+    }
+
+    #status-bar h1 {
+      font-size: 16px;
+      font-weight: 600;
+      color: #00d4aa;
+      letter-spacing: 1px;
+    }
+
+    #status-info {
+      display: -webkit-flex;
+      display: flex;
+      -webkit-align-items: center;
+      align-items: center;
+      font-size: 12px;
+      color: #999;
+    }
+    #status-info > * {
+      margin-left: 12px;
+    }
+    #status-info > *:first-child {
+      margin-left: 0;
+    }
+
+    .status-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      margin-right: 4px;
+    }
+    .status-dot.green { background: #00d4aa; }
+    .status-dot.yellow { background: #ffc107; }
+    .status-dot.red { background: #ff4444; }
+
+    .btn {
+      display: inline-block;
+      padding: 6px 14px;
+      border: 1px solid #444;
+      background: #2a2a3e;
+      color: #e0e0e0;
+      border-radius: 6px;
+      font-size: 12px;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+      text-decoration: none;
+      transition: background 0.2s;
+    }
+    .btn:hover, .btn:active {
+      background: #3a3a5e;
+    }
+    .btn-primary {
+      background: #00d4aa;
+      color: #000;
+      border-color: #00d4aa;
+      font-weight: 600;
+    }
+    .btn-primary:hover, .btn-primary:active {
+      background: #00e6b5;
+    }
+    .btn-danger {
+      background: #c0392b;
+      border-color: #c0392b;
+      color: #fff;
+    }
+    .btn-small {
+      padding: 4px 10px;
+      font-size: 11px;
+    }
+
+    /* Main Content */
+    #main {
+      margin-top: 52px;
+      padding: 12px;
+    }
+
+    /* Scanning indicator */
+    #scan-status {
+      text-align: center;
+      padding: 12px;
+      font-size: 13px;
+      color: #888;
+    }
+    #scan-status.scanning {
+      color: #00d4aa;
+    }
+    #scan-status .spinner {
+      display: inline-block;
+      width: 14px;
+      height: 14px;
+      border: 2px solid #00d4aa;
+      border-top-color: transparent;
+      border-radius: 50%;
+      -webkit-animation: spin 0.8s linear infinite;
+      animation: spin 0.8s linear infinite;
+      vertical-align: middle;
+      margin-right: 6px;
+    }
+    @-webkit-keyframes spin {
+      to { -webkit-transform: rotate(360deg); }
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    /* Actions Bar */
+    #actions {
+      display: -webkit-flex;
+      display: flex;
+      margin: -4px -4px 8px -4px;
+      -webkit-flex-wrap: wrap;
+      flex-wrap: wrap;
+    }
+    #actions > * {
+      margin: 4px;
+    }
+
+    /* Camera Grid */
+    #camera-grid {
+      display: -webkit-flex;
+      display: flex;
+      -webkit-flex-wrap: wrap;
+      flex-wrap: wrap;
+      margin: -5px;  /* iOS 9 fallback for gap */
+    }
+    #camera-grid > * {
+      margin: 5px;   /* iOS 9 fallback for gap */
+    }
+
+    .camera-card {
+      background: #161625;
+      border-radius: 10px;
+      overflow: hidden;
+      border: 1px solid #2a2a3e;
+      position: relative;
+      -webkit-flex: 1 1 calc(50% - 10px);
+      flex: 1 1 calc(50% - 10px);
+      min-width: 280px;
+      width: calc(50% - 10px); /* iOS 9 fallback */
+    }
+
+    .camera-card.full-width {
+      -webkit-flex: 1 1 100%;
+      flex: 1 1 100%;
+    }
+
+    .camera-preview {
+      position: relative;
+      background: #000;
+      width: 100%;
+      overflow: hidden;
+    }
+    .camera-preview::before {
+      content: '';
+      display: block;
+      padding-bottom: 56.25%; /* 16:9 aspect ratio for iOS 9 */
+    }
+    .camera-preview img,
+    .camera-preview .placeholder {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+    }
+
+    .camera-preview img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
+    }
+
+    .camera-preview .placeholder {
+      display: -webkit-flex;
+      display: flex;
+      -webkit-align-items: center;
+      align-items: center;
+      -webkit-justify-content: center;
+      justify-content: center;
+      width: 100%;
+      height: 100%;
+      color: #555;
+      font-size: 14px;
+      text-align: center;
+      padding: 20px;
+    }
+
+    .camera-badge {
+      position: absolute;
+      top: 8px;
+      left: 8px;
+      background: rgba(0, 0, 0, 0.7);
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+    }
+    .camera-badge.baseus { color: #ffc107; }
+    .camera-badge.rtsp { color: #00d4aa; }
+    .camera-badge.http { color: #5dade2; }
+
+    .camera-controls {
+      position: absolute;
+      bottom: 8px;
+      right: 8px;
+      display: -webkit-flex;
+      display: flex;
+    }
+    .camera-controls > * {
+      margin-left: 6px;
+    }
+    .camera-controls > *:first-child {
+      margin-left: 0;
+    }
+
+    .camera-info {
+      padding: 10px 12px;
+    }
+
+    .camera-name {
+      font-size: 13px;
+      font-weight: 600;
+      color: #ddd;
+      margin-bottom: 2px;
+    }
+
+    .camera-details {
+      font-size: 11px;
+      color: #777;
+      display: -webkit-flex;
+      display: flex;
+      -webkit-align-items: center;
+      align-items: center;
+    }
+    .camera-details > * {
+      margin-left: 8px;
+    }
+    .camera-details > *:first-child {
+      margin-left: 0;
+    }
+
+    .camera-details .addr {
+      color: #555;
+      font-family: 'Courier New', monospace;
+    }
+
+    /* Stream Status */
+    .stream-indicator {
+      display: inline-block;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      margin-right: 4px;
+    }
+    .stream-indicator.active { background: #00d4aa; }
+    .stream-indicator.inactive { background: #ff4444; }
+    .stream-indicator.connecting { background: #ffc107; }
+
+    /* Empty State */
+    #empty-state {
+      text-align: center;
+      padding: 60px 20px;
+      color: #555;
+    }
+    #empty-state .icon {
+      font-size: 48px;
+      margin-bottom: 16px;
+    }
+    #empty-state h2 {
+      font-size: 18px;
+      color: #888;
+      margin-bottom: 8px;
+    }
+    #empty-state p {
+      font-size: 13px;
+      color: #666;
+      line-height: 1.5;
+    }
+
+    /* Notification */
+    #notification {
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #2a2a3e;
+      color: #e0e0e0;
+      padding: 10px 20px;
+      border-radius: 8px;
+      font-size: 13px;
+      border: 1px solid #444;
+      display: none;
+      z-index: 200;
+      white-space: nowrap;
+    }
+    #notification.show {
+      display: block;
+      -webkit-animation: fadeInUp 0.3s ease;
+      animation: fadeInUp 0.3s ease;
+    }
+    @-webkit-keyframes fadeInUp {
+      from { opacity: 0; transform: translateX(-50%) translateY(20px); }
+      to { opacity: 1; transform: translateX(-50%) translateY(0); }
+    }
+    @keyframes fadeInUp {
+      from { opacity: 0; transform: translateX(-50%) translateY(20px); }
+      to { opacity: 1; transform: translateX(-50%) translateY(0); }
+    }
+
+    /* Fullscreen overlay */
+    #fullscreen-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: #000;
+      z-index: 500;
+      display: none;
+      -webkit-flex-direction: column;
+      flex-direction: column;
+    }
+    #fullscreen-overlay.active {
+      display: -webkit-flex;
+      display: flex;
+    }
+    #fullscreen-overlay .fs-header {
+      padding: 8px 16px;
+      background: #1a1a2e;
+      display: -webkit-flex;
+      display: flex;
+      -webkit-align-items: center;
+      align-items: center;
+      -webkit-justify-content: space-between;
+      justify-content: space-between;
+      height: 44px;
+    }
+    #fullscreen-overlay .fs-header span {
+      font-size: 14px;
+      font-weight: 600;
+    }
+    #fullscreen-overlay .fs-video {
+      -webkit-flex: 1;
+      flex: 1;
+      display: -webkit-flex;
+      display: flex;
+      -webkit-align-items: center;
+      align-items: center;
+      -webkit-justify-content: center;
+      justify-content: center;
+      background: #000;
+    }
+    #fullscreen-overlay .fs-video img {
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+    }
+
+    /* Responsive */
+    @media (max-width: 768px) {
+      .camera-card {
+        -webkit-flex: 1 1 100%;
+        flex: 1 1 100%;
+        min-width: 0;
+      }
+      #status-bar h1 { font-size: 14px; }
+    }
+
+    /* Manual add form */
+    #manual-form {
+      display: none;
+      background: #1a1a2e;
+      padding: 16px;
+      border-radius: 10px;
+      margin-bottom: 12px;
+      border: 1px solid #333;
+    }
+    #manual-form.show { display: block; }
+    #manual-form .form-row {
+      display: -webkit-flex;
+      display: flex;
+      margin: -4px;
+      margin-bottom: 4px;
+      -webkit-flex-wrap: wrap;
+      flex-wrap: wrap;
+    }
+    #manual-form .form-row > * {
+      margin: 4px;
+    }
+    #manual-form input,
+    #manual-form select {
+      background: #0a0a0a;
+      border: 1px solid #333;
+      color: #e0e0e0;
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-size: 13px;
+      -webkit-flex: 1;
+      flex: 1;
+      min-width: 100px;
+    }
+    #manual-form input:focus,
+    #manual-form select:focus {
+      outline: none;
+      border-color: #00d4aa;
+    }
+    #manual-form label {
+      font-size: 11px;
+      color: #888;
+      display: block;
+      margin-bottom: 2px;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Status Bar -->
+  <div id="status-bar">
+    <h1>⌂ OpenMonitor</h1>
+    <div id="status-info">
+      <span id="camera-count">0 cameras</span>
+      <button class="btn btn-primary btn-small" onclick="scanNetwork()">Scan</button>
+    </div>
+  </div>
+
+  <!-- Main Content -->
+  <div id="main">
+
+    <!-- Scan Status -->
+    <div id="scan-status">Ready — tap <strong>Scan</strong> to find cameras on your network</div>
+
+    <!-- Actions -->
+    <div id="actions">
+      <button class="btn btn-small" onclick="toggleFullscreen()">⛶ Fullscreen</button>
+      <button class="btn btn-small" onclick="toggleManualForm()">+ Add Manual</button>
+      <button class="btn btn-small" onclick="startAllStreams()">▶ Start All</button>
+      <button class="btn btn-small" onclick="stopAllStreams()">■ Stop All</button>
+    </div>
+
+    <!-- Manual Add Form -->
+    <div id="manual-form">
+      <div class="form-row">
+        <div style="-webkit-flex:1;flex:1">
+          <label>Host/IP</label>
+          <input type="text" id="m-host" placeholder="192.168.1.100">
+        </div>
+        <div style="width:80px">
+          <label>Port</label>
+          <input type="number" id="m-port" value="554" placeholder="554">
+        </div>
+        <div style="width:100px">
+          <label>Type</label>
+          <select id="m-type">
+            <option value="RTSP">RTSP</option>
+            <option value="HTTP">HTTP</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div style="-webkit-flex:1;flex:1">
+          <label>Name (optional)</label>
+          <input type="text" id="m-name" placeholder="My Camera">
+        </div>
+        <div style="-webkit-flex:1;flex:1">
+          <label>RTSP Path (optional)</label>
+          <input type="text" id="m-path" placeholder="/stream">
+        </div>
+      </div>
+      <div class="form-row">
+        <div style="-webkit-flex:1;flex:1">
+          <label>Username (optional)</label>
+          <input type="text" id="m-user" placeholder="admin">
+        </div>
+        <div style="-webkit-flex:1;flex:1">
+          <label>Password (optional)</label>
+          <input type="password" id="m-pass" placeholder="password">
+        </div>
+      </div>
+      <div class="form-row">
+        <button class="btn btn-primary" onclick="addManualCamera()">Add Camera</button>
+        <button class="btn" onclick="toggleManualForm()">Cancel</button>
+      </div>
+    </div>
+
+    <!-- Camera Grid -->
+    <div id="camera-grid"></div>
+
+    <!-- Empty State -->
+    <div id="empty-state">
+      <div class="icon">📷</div>
+      <h2>No Cameras Found</h2>
+      <p>Tap <strong>Scan</strong> to discover Baseus cameras<br>on your network, or add one manually.</p>
+    </div>
+
+  </div>
+
+  <!-- Fullscreen Overlay -->
+  <div id="fullscreen-overlay">
+    <div class="fs-header">
+      <span id="fs-title">Camera</span>
+      <button class="btn btn-small" onclick="closeFullscreen()">✕ Close</button>
+    </div>
+    <div class="fs-video">
+      <img id="fs-img" src="" alt="Camera feed">
+    </div>
+  </div>
+
+  <!-- Notification -->
+  <div id="notification"></div>
+
+  <script>
+    // ============================================
+    // OpenMonitor Dashboard - Client Logic
+    // Compatible with iPad 2 / iOS 9 Safari
+    // ============================================
+
+    var cameras = [];
+    var activeStreams = {};
+    var scanTimer = null;
+    var fullscreenCameraId = null;
+
+    // ============================================
+    // API Helpers
+    // ============================================
+
+    function api(url, callback) {
+      var xhr = new XMLHttpRequest();
+      xhr.open('GET', url, true);
+      xhr.onreadystatechange = function() {
+        if (xhr.readyState === 4) {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            try {
+              callback(JSON.parse(xhr.responseText));
+            } catch(e) {
+              console.error('Parse error:', e);
+            }
+          } else {
+            showNotification('API error: ' + xhr.status);
+          }
+        }
+      };
+      xhr.onerror = function() {
+        showNotification('Network error - check server connection');
+      };
+      xhr.send();
+    }
+
+    function apiPost(url, data, callback) {
+      var xhr = new XMLHttpRequest();
+      xhr.open('POST', url, true);
+      xhr.setRequestHeader('Content-Type', 'application/json');
+      xhr.onreadystatechange = function() {
+        if (xhr.readyState === 4) {
+          if (callback) {
+            try { callback(JSON.parse(xhr.responseText)); } catch(e) {}
+          }
+        }
+      };
+      xhr.send(JSON.stringify(data));
+    }
+
+    function apiDelete(url, callback) {
+      var xhr = new XMLHttpRequest();
+      xhr.open('DELETE', url, true);
+      xhr.onreadystatechange = function() {
+        if (xhr.readyState === 4 && callback) {
+          try { callback(JSON.parse(xhr.responseText)); } catch(e) {}
+        }
+      };
+      xhr.send();
+    }
+
+    // ============================================
+    // Camera Management
+    // ============================================
+
+    function scanNetwork() {
+      var status = document.getElementById('scan-status');
+      status.className = 'scanning';
+      status.innerHTML = '<span class="spinner"></span> Scanning network for cameras...';
+
+      api('/api/discover', function(data) {
+        status.className = '';
+        if (data.success) {
+          cameras = data.cameras || [];
+          renderCameras();
+          updateStatus();
+          var msg = 'Found ' + cameras.length + ' camera' + (cameras.length !== 1 ? 's' : '');
+          if (data.baseusCount > 0) {
+            msg += ' (' + data.baseusCount + ' Baseus)';
+          }
+          showNotification(msg);
+        } else {
+          status.textContent = 'Scan failed: ' + (data.error || 'Unknown error');
+          showNotification('Scan failed');
+        }
+      });
+    }
+
+    function loadCameras() {
+      api('/api/cameras', function(data) {
+        cameras = data.cameras || [];
+        renderCameras();
+        updateStatus();
+      });
+    }
+
+    function updateStreamStatus() {
+      api('/api/streams', function(data) {
+        var streams = data.streams || {};
+        var ids = Object.keys(streams);
+        for (var si = 0; si < ids.length; si++) {
+          var id = ids[si];
+          var card = document.querySelector('.camera-card[data-id="' + id + '"]');
+          if (card) {
+            var indicator = card.querySelector('.stream-indicator');
+            if (indicator) {
+              if (streams[id].isRunning) {
+                indicator.className = 'stream-indicator active';
+              } else if (streams[id].errors > 0) {
+                indicator.className = 'stream-indicator connecting';
+              }
+            }
+          }
+        }
+      });
+    }
+
+    function startStream(cameraId) {
+      var card = document.querySelector('.camera-card[data-id="' + cameraId + '"]');
+      if (card) {
+        var img = card.querySelector('.camera-preview img');
+        var indicator = card.querySelector('.stream-indicator');
+        if (img) {
+          img.src = '/stream/' + cameraId;
+          img.style.display = 'block';
+          var placeholder = card.querySelector('.placeholder');
+          if (placeholder) placeholder.style.display = 'none';
+        }
+        if (indicator) {
+          indicator.className = 'stream-indicator connecting';
+        }
+        card.querySelector('.stream-btn').textContent = '\u25A0';
+        card.querySelector('.stream-btn').className = 'btn btn-small btn-danger stream-btn';
+        card.querySelector('.stream-btn').setAttribute('onclick', 'stopStream("' + cameraId + '")');
+      }
+
+      apiPost('/api/cameras/' + encodeURIComponent(cameraId) + '/start', {}, function() {
+        updateStreamStatus();
+      });
+    }
+
+    function stopStream(cameraId) {
+      var card = document.querySelector('.camera-card[data-id="' + cameraId + '"]');
+      if (card) {
+        var img = card.querySelector('.camera-preview img');
+        if (img) {
+          img.src = '';
+          img.style.display = 'none';
+          var placeholder = card.querySelector('.placeholder');
+          if (placeholder) { placeholder.style.display = '-webkit-flex'; placeholder.style.display = 'flex'; }
+        }
+        var indicator = card.querySelector('.stream-indicator');
+        if (indicator) indicator.className = 'stream-indicator inactive';
+        card.querySelector('.stream-btn').textContent = '\u25B6';
+        card.querySelector('.stream-btn').className = 'btn btn-small btn-primary stream-btn';
+        card.querySelector('.stream-btn').setAttribute('onclick', 'startStream("' + cameraId + '")');
+      }
+
+      apiPost('/api/cameras/' + encodeURIComponent(cameraId) + '/stop', {}, function() {
+        updateStreamStatus();
+      });
+    }
+
+    function toggleStream(cameraId) {
+      var card = document.querySelector('.camera-card[data-id="' + cameraId + '"]');
+      if (card) {
+        var btn = card.querySelector('.stream-btn');
+        if (btn.textContent === '\u25B6') {
+          startStream(cameraId);
+        } else {
+          stopStream(cameraId);
+        }
+      }
+    }
+
+    function startAllStreams() {
+      for (var si = 0; si < cameras.length; si++) {
+        startStream(cameras[si].id);
+      }
+      showNotification('Starting all streams...');
+    }
+
+    function stopAllStreams() {
+      for (var si = 0; si < cameras.length; si++) {
+        stopStream(cameras[si].id);
+      }
+      showNotification('Stopped all streams');
+    }
+
+    function removeCamera(cameraId) {
+      stopStream(cameraId);
+      apiDelete('/api/cameras/' + encodeURIComponent(cameraId), function() {
+        var filtered = [];
+        for (var ci = 0; ci < cameras.length; ci++) {
+          if (cameras[ci].id !== cameraId) {
+            filtered.push(cameras[ci]);
+          }
+        }
+        cameras = filtered;
+        renderCameras();
+        updateStatus();
+        showNotification('Camera removed');
+      });
+    }
+
+    function openFullscreen(cameraId) {
+      fullscreenCameraId = cameraId;
+      var camera = null;
+      for (var ci = 0; ci < cameras.length; ci++) {
+        if (cameras[ci].id === cameraId) {
+          camera = cameras[ci];
+          break;
+        }
+      }
+      if (!camera) return;
+
+      document.getElementById('fs-title').textContent = camera.name || cameraId;
+      document.getElementById('fs-img').src = '/stream/' + cameraId;
+      document.getElementById('fullscreen-overlay').className = 'active';
+
+      startStream(cameraId);
+    }
+
+    function closeFullscreen() {
+      document.getElementById('fullscreen-overlay').className = '';
+      document.getElementById('fs-img').src = '';
+      fullscreenCameraId = null;
+    }
+
+    function toggleFullscreen() {
+      var cards = document.querySelectorAll('.camera-card');
+      for (var ci = 0; ci < cards.length; ci++) {
+        cards[ci].classList.toggle('full-width');
+      }
+    }
+
+    function toggleManualForm() {
+      var form = document.getElementById('manual-form');
+      if (form.className === 'show') {
+        form.className = '';
+      } else {
+        form.className = 'show';
+      }
+    }
+
+    function addManualCamera() {
+      var host = document.getElementById('m-host').value;
+      host = host.replace(/^\s+|\s+$/g, '');
+      var port = parseInt(document.getElementById('m-port').value) || 554;
+      var type = document.getElementById('m-type').value;
+      var name = document.getElementById('m-name').value.replace(/^\s+|\s+$/g, '');
+      var path = document.getElementById('m-path').value.replace(/^\s+|\s+$/g, '');
+      var user = document.getElementById('m-user').value.replace(/^\s+|\s+$/g, '');
+      var pass = document.getElementById('m-pass').value;
+
+      if (!host) {
+        showNotification('Please enter a host or IP address');
+        return;
+      }
+
+      var data = {
+        host: host,
+        port: port,
+        transport: type,
+        name: name || null,
+        rtspPath: path || null,
+        username: user || null,
+        password: pass || null
+      };
+
+      apiPost('/api/cameras', data, function(result) {
+        if (result.success) {
+          loadCameras();
+          document.getElementById('manual-form').className = '';
+          showNotification('Camera added');
+          document.getElementById('m-host').value = '';
+          document.getElementById('m-name').value = '';
+          document.getElementById('m-path').value = '';
+          document.getElementById('m-user').value = '';
+          document.getElementById('m-pass').value = '';
+        } else {
+          showNotification('Error: ' + (result.error || 'Unknown'));
+        }
+      });
+    }
+
+    // ============================================
+    // Render Functions
+    // ============================================
+
+    function renderCameras() {
+      var grid = document.getElementById('camera-grid');
+      var empty = document.getElementById('empty-state');
+
+      if (cameras.length === 0) {
+        grid.innerHTML = '';
+        empty.style.display = 'block';
+        return;
+      }
+
+      empty.style.display = 'none';
+      var html = '';
+
+      for (var i = 0; i < cameras.length; i++) {
+        var c = cameras[i];
+        var badgeClass = c.isBaseus ? 'baseus' : (c.transport === 'RTSP' ? 'rtsp' : 'http');
+        var badgeText = c.isBaseus ? 'BASEUS' : (c.transport || 'CAMERA');
+        var confidencePct = Math.round((c.confidence || 0.5) * 100);
+
+        html += '<div class="camera-card" data-id="' + escapeHtml(c.id) + '">';
+        html += '  <div class="camera-preview" onclick="openFullscreen(\'' + escapeHtml(c.id) + '\')">';
+        html += '    <div class="placeholder" id="placeholder-' + escapeHtml(c.id) + '">';
+        html += '      <span>Tap to view ▶</span>';
+        html += '    </div>';
+        html += '    <img id="stream-' + escapeHtml(c.id) + '" src="" alt="" style="display:none">';
+        html += '    <div class="camera-badge ' + badgeClass + '">' + badgeText + '</div>';
+        html += '    <div class="camera-controls">';
+        html += '      <button class="btn btn-small btn-primary stream-btn" onclick="event.stopPropagation(); toggleStream(\'' + escapeHtml(c.id) + '\')">▶</button>';
+        html += '      <button class="btn btn-small" onclick="event.stopPropagation(); openFullscreen(\'' + escapeHtml(c.id) + '\')">⛶</button>';
+        html += '      <button class="btn btn-small btn-danger" onclick="event.stopPropagation(); removeCamera(\'' + escapeHtml(c.id) + '\')">✕</button>';
+        html += '    </div>';
+        html += '  </div>';
+        html += '  <div class="camera-info">';
+        html += '    <div class="camera-name">' + escapeHtml(c.name || c.id) + '</div>';
+        html += '    <div class="camera-details">';
+        html += '      <span class="stream-indicator inactive"></span>';
+        html += '      <span>' + (c.transport || '?') + '</span>';
+        html += '      <span class="addr">' + escapeHtml(c.host) + ':' + (c.port || '?') + '</span>';
+        html += '      <span>' + confidencePct + '%</span>';
+        html += '    </div>';
+        html += '  </div>';
+        html += '</div>';
+      }
+
+      grid.innerHTML = html;
+    }
+
+    function updateStatus() {
+      var count = document.getElementById('camera-count');
+      count.textContent = cameras.length + ' camera' + (cameras.length !== 1 ? 's' : '');
+    }
+
+    function updateStreamStatus() {
+      api('/api/streams', function(data) {
+        var streams = data.streams || {};
+        for (var id in streams) {
+          var card = document.querySelector('.camera-card[data-id="' + id + '"]');
+          if (card) {
+            var indicator = card.querySelector('.stream-indicator');
+            if (indicator) {
+              if (streams[id].isRunning) {
+                indicator.className = 'stream-indicator active';
+              } else if (streams[id].errors > 0) {
+                indicator.className = 'stream-indicator connecting';
+              }
+            }
+          }
+        }
+      });
+    }
+
+    // ============================================
+    // Utility
+    // ============================================
+
+    function escapeHtml(str) {
+      if (!str) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+    }
+
+    function showNotification(msg) {
+      var el = document.getElementById('notification');
+      el.textContent = msg;
+      el.className = 'show';
+      clearTimeout(el._timeout);
+      el._timeout = setTimeout(function() {
+        el.className = '';
+      }, 3000);
+    }
+
+    // ============================================
+    // Auto-refresh
+    // ============================================
+
+    // Load cameras on page load
+    document.addEventListener('DOMContentLoaded', function() {
+      loadCameras();
+
+      // Auto-scan on first load (after 1 second)
+      setTimeout(function() {
+        scanNetwork();
+      }, 1000);
+
+      // Refresh stream status periodically
+      setInterval(function() {
+        updateStreamStatus();
+      }, 10000);
+
+      // Refresh camera list periodically
+      setInterval(function() {
+        loadCameras();
+      }, 30000);
+    });
+  </script>
+
+</body>
+</html>
