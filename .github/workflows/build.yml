@@ -25,7 +25,9 @@ jobs:
         run: |
           mkdir -p $HOME/theos/vendor/dm.pl
           ln -sf $HOME/theos/bin/dm.pl $HOME/theos/vendor/dm.pl/dm.pl
+          chmod +x $HOME/theos/vendor/dm.pl/dm.pl
           echo "$HOME/theos/vendor/dm.pl" >> $GITHUB_PATH
+          echo "$HOME/theos/bin" >> $GITHUB_PATH
       - name: Update Theos vendor files
         run: |
           THEOS=$HOME/theos $HOME/theos/bin/update-theos
