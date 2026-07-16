@@ -1,4 +1,4 @@
-export THEOS = C:/Users/jakef/theos
+# export THEOS = C:/Users/jakef/theos
 export THEOS_PLATFORM = iphone
 TARGET = iphone:clang:latest:14.0
 

@@ -1,2 +1,1 @@
-export THEOS = C:/Users/jakef/theos
-export THEOS_PLATFORM = iphone
+export THEOS_PLATFORM=iphone
