@@ -21,6 +21,9 @@ jobs:
           curl -L https://raw.githubusercontent.com/theos/theos/master/bin/dm.pl -o $HOME/theos/bin/dm.pl
           chmod +x $HOME/theos/bin/dm.pl
           echo "$HOME/theos/bin" >> $GITHUB_PATH
+      - name: Update Theos vendor files
+        run: |
+          THEOS=$HOME/theos $HOME/theos/bin/update-theos
       - name: Copy dm.pl into vendor
         run: |
           mkdir -p $HOME/theos/vendor/dm.pl
@@ -30,9 +33,12 @@ jobs:
           chmod +x $HOME/theos/vendor/dm.pl/dm.pl
           echo "$HOME/theos/vendor/dm.pl" >> $GITHUB_PATH
           echo "$HOME/theos/bin" >> $GITHUB_PATH
-      - name: Update Theos vendor files
+      - name: Verify dm.pl vendor
         run: |
-          THEOS=$HOME/theos $HOME/theos/bin/update-theos
+          echo "Listing vendor dm.pl directory:"
+          ls -R $HOME/theos/vendor/dm.pl || true
+          echo "Showing dm.pl content:"
+          cat $HOME/theos/vendor/dm.pl/dm.pl || true
       - name: Set up Theos environment
         run: |
           echo "THEOS=$HOME/theos" >> $GITHUB_ENV
