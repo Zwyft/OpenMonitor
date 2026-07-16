@@ -21,10 +21,12 @@ jobs:
           echo "export THEOS=$HOME/theos" >> $GITHUB_ENV
           echo "export THEOS_PLATFORM=iphone" >> $GITHUB_ENV
       - name: Build the tweak
+        env:
+          THEOS_PLATFORM: iphone
         run: |
           make package
       - name: Upload .deb artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: baseussecurity-deb
           path: packages/*.deb
