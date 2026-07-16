@@ -1,0 +1,30 @@
+name: Build BaseusSecurity Tweak
+
+on:
+  push:
+    paths:
+      - '**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Install dpkg (needed for .deb packaging)
+        run: brew install dpkg
+      - name: Clone Theos
+        run: |
+          git clone --depth 1 https://github.com/theos/theos.git $HOME/theos
+      - name: Set up Theos environment
+        run: |
+          echo "export THEOS=$HOME/theos" >> $GITHUB_ENV
+          echo "export THEOS_PLATFORM=iphone" >> $GITHUB_ENV
+      - name: Build the tweak
+        run: |
+          make package
+      - name: Upload .deb artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: baseussecurity-deb
+          path: packages/*.deb
