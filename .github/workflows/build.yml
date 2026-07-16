@@ -21,10 +21,12 @@ jobs:
           curl -L https://raw.githubusercontent.com/theos/theos/master/bin/dm.pl -o $HOME/theos/bin/dm.pl
           chmod +x $HOME/theos/bin/dm.pl
           echo "$HOME/theos/bin" >> $GITHUB_PATH
-      - name: Link dm.pl into vendor
+      - name: Copy dm.pl into vendor
         run: |
           mkdir -p $HOME/theos/vendor/dm.pl
-          ln -sf $HOME/theos/bin/dm.pl $HOME/theos/vendor/dm.pl/dm.pl
+          if [ ! -f $HOME/theos/vendor/dm.pl/dm.pl ]; then
+            cp $HOME/theos/bin/dm.pl $HOME/theos/vendor/dm.pl/dm.pl
+          fi
           chmod +x $HOME/theos/vendor/dm.pl/dm.pl
           echo "$HOME/theos/vendor/dm.pl" >> $GITHUB_PATH
           echo "$HOME/theos/bin" >> $GITHUB_PATH
