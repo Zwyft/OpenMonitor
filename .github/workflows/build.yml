@@ -20,6 +20,9 @@ jobs:
           curl -L https://raw.githubusercontent.com/theos/theos/master/bin/dm.pl -o $HOME/theos/bin/dm.pl
           chmod +x $HOME/theos/bin/dm.pl
           echo "$HOME/theos/bin" >> $GITHUB_PATH
+      - name: Update Theos vendor files
+        run: |
+          $HOME/theos/bin/update-theos
       - name: Set up Theos environment
         run: |
           echo "THEOS=$HOME/theos" >> $GITHUB_ENV
