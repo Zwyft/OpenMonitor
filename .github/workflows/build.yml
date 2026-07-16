@@ -13,6 +13,8 @@ jobs:
       - uses: actions/checkout@v3
       - name: Install dpkg (needed for .deb packaging)
         run: brew install dpkg
+      - name: Add dpkg to PATH (required for dm.pl)
+        run: echo "$(brew --prefix dpkg)/bin" >> $GITHUB_PATH
       - name: Clone Theos
         run: |
           git clone --depth 1 https://github.com/theos/theos.git $HOME/theos
