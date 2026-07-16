@@ -18,8 +18,8 @@ jobs:
           git clone --depth 1 https://github.com/theos/theos.git $HOME/theos
       - name: Set up Theos environment
         run: |
-          echo "export THEOS=$HOME/theos" >> $GITHUB_ENV
-          echo "export THEOS_PLATFORM=iphone" >> $GITHUB_ENV
+          echo "THEOS=$HOME/theos" >> $GITHUB_ENV
+          echo "THEOS_PLATFORM=iphone" >> $GITHUB_ENV
       - name: Build the tweak
         env:
           THEOS_PLATFORM: iphone
